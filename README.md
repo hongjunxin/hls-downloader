@@ -15,7 +15,6 @@ option
 
 ## note
 - install ffmpeg at first
-- not support https so far
 
 ## license
 - MIT
