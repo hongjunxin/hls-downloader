@@ -48,6 +48,7 @@ typedef struct http_event {
 int http_parse_url(char *url, http_event_t *hev);
 int http_connect_server(http_event_t *hev);
 int http_get_file(char *host, char* uri, int fd);
+int http_get_file_name(http_event_t *hev);
 int http_send_request(http_event_t *hev);
 int http_read_response(http_event_t *hev);
 int http_download_file(http_event_t *hev);

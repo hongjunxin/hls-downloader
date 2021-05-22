@@ -1,11 +1,12 @@
 TARGET = obj/dhls
-CFLAG = -g -fno-stack-protector
+CFLAG = -g -fno-stack-protector -DUSE_CURL
 CC = gcc
 
 OBJ = obj/downloader.o \
 	  obj/http.o \
 	  obj/utility.o \
-	  obj/epoll.o
+	  obj/epoll.o \
+	  obj/mcurl.o
 
 HEADER = log.h
 
@@ -17,7 +18,7 @@ prepare:
 	fi
 
 $(TARGET) : $(OBJ)
-	$(CC) $(OBJ) -o $@
+	$(CC) $(OBJ) -lcurl -o $@
 
 obj/downloader.o : downloader.c $(HEADER)
 	$(CC) -c $(CFLAG) $< -o $@
@@ -29,6 +30,9 @@ obj/utility.o : utility.c utility.h $(HEADER)
 	$(CC) -c $(CFLAG) $< -o $@
 
 obj/epoll.o : epoll.c epoll.h $(HEADER)
+	$(CC) -c $(CFLAG) $< -o $@
+
+obj/mcurl.o : mcurl.c mcurl.h $(HEADER)
 	$(CC) -c $(CFLAG) $< -o $@
 
 clean:

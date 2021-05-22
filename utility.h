@@ -26,6 +26,7 @@ typedef struct {
 } list_t;
 
 typedef struct ts_list {
+    char *m3u8_url;
     char base_uri[256];
     int ts_cnt;
     int taken_cnt;
@@ -40,5 +41,6 @@ void *util_list_push(list_t *l);
 list_t *util_create_list(int size, int nalloc);
 char *util_str_begin_with(char *haystack, char *needle, size_t len);
 void util_exit(void);
+void util_show_download_progress(ts_list_t *ts_list);
 
 #endif

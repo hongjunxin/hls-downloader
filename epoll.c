@@ -9,6 +9,7 @@
 #include "log.h"
 #include "http.h"
 #include "epoll.h"
+#include "utility.h"
 
 static void epoll_show_download_progress(ts_list_t *ts_list);
 
@@ -57,7 +58,7 @@ int epoll_do_wait(int epfd, int event_cnt, ts_list_t *ts_list)
                     }                    
                 } else {
                     ts_list->success++;
-                    epoll_show_download_progress(ts_list);
+                    util_show_download_progress(ts_list);
 
                     ts = ts_list->get_ts_name(ts_list);
                     if (ts) {
@@ -133,20 +134,4 @@ int epoll_do_ctl(int epfd, int op, struct epoll_event *ev)
     }
 
     return 0;
-}
-
-static void epoll_show_download_progress(ts_list_t *ts_list)
-{
-    char bar[52] = {'\0'};
-    int percen, i;
-
-    percen = ts_list->success * 100 / ts_list->ts_cnt;
-
-    for (i = 0; i < percen / 2; ++i) {
-        bar[i] = '=';
-    }
-    bar[i] = '>';
-
-    printf("download ts files... %%%d [%-51s] [%d/%d]\r", 
-        percen, bar, ts_list->success, ts_list->ts_cnt);
 }

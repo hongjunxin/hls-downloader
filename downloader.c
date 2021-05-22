@@ -11,15 +11,18 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <signal.h>
+#include <curl/curl.h>
 
 #include "log.h"
 #include "http.h"
 #include "epoll.h"
 #include "utility.h"
+#include "mcurl.h"
 
 static int parse_option(int argc, char **argv);
 static void set_log_level(char *level);
 static int parse_url(char *url, http_event_t *hev);
+static int get_m3u8_file(http_event_t *hev);
 static int parse_m3u8(http_event_t *hev, ts_list_t *ts_list);
 static int add_download_ts_event(int epfd, http_event_t *hev, ts_list_t *ts_list);
 static char* get_ts_file_name(ts_list_t *ts_list);
@@ -27,6 +30,7 @@ static void merge_ts_files_task(char *desc_file, char *out_file);
 static int check_output_file_format(char *filename_out);
 static void signal_handler(int signo);
 static int check_file_exist(char *filename);
+static int download_ts_files(http_event_t *hevs, ts_list_t *tslist);
 
 extern int errno;
 static char *m3u8_url = NULL;
@@ -47,9 +51,7 @@ int log_level = error;
 int main(int argc, char **argv)
 {
     struct sigaction sa;
-    int epfd, i, len;    
-    http_event_t *hev;
-    char *mark;
+    int epfd, i, len;
     char *oldpath;
     char cmd[256];
     ts_list_t ts_list;    
@@ -70,12 +72,18 @@ int main(int argc, char **argv)
         return -1;
     }
 
-    memset(&ts_list, 0, sizeof(ts_list_t));
-    ts_list.get_ts_name = get_ts_file_name;
-
     if (parse_option(argc, argv) != 0) {
         return -1;
     }
+
+    if (m3u8_url == NULL) {
+        log_error("main: lack of '-i' parameter, '-h' option for help.");
+        return -1;
+    }
+
+    memset(&ts_list, 0, sizeof(ts_list_t));
+    ts_list.get_ts_name = get_ts_file_name;
+    ts_list.m3u8_url = m3u8_url;
 
     hevs = util_calloc(fd_nums, sizeof(http_event_t));
     if (!hevs) {
@@ -87,58 +95,13 @@ int main(int argc, char **argv)
         hevs[i].buffer.dst = -1;
     }
 
-    if ((epfd = epoll_do_create(EPOLL_MAX_EVENTS)) == -1) {
-        return -1;
-    }
-
-    /* get m3u8 file */
-    hev = &hevs[0];
-    if (http_parse_url(m3u8_url, hev) != 0 ||
-           http_connect_server(hev) != 0 ||
-           http_send_request(hev) != 0 ||
-           http_read_response(hev) != 0 ||
-           http_download_file(hev) != 0) {
-        return -1;
-    }
-
-    if (parse_m3u8(hev, &ts_list) != 0) {
-        return -1;
-    }
-
-    m3u8_file = util_calloc(sizeof(char), hev->buffer.filename_len);
-    if (!m3u8_file) {
-        util_exit();
-    }
-    memcpy(m3u8_file, hev->buffer.file, hev->buffer.filename_len);
-
-    mark = strstr(hev->uri, hev->buffer.file);
-    memcpy(ts_list.base_uri, hev->uri, mark - hev->uri - 1);
-
-    if (add_download_ts_event(epfd, hev, &ts_list) != 0) {
-        return -1;
-    }
- 
-    for (i = 1; i < fd_nums; ++i) {
-        memcpy(hevs[i].buffer.dir, hev->buffer.dir, strlen(hev->buffer.dir));
-        memcpy(hevs[i].host, hev->host, strlen(hev->host));
-        memcpy(hevs[i].ip, hev->ip, strlen(hev->ip));
-        hevs[i].port = hev->port;
-
-        if (http_connect_server(&hevs[i]) != 0) {
-            log_error("main: connect |%s:%d| failed", hevs[i].ip, hevs[i].port);
-            return -1;
-        }
-        
-        if (add_download_ts_event(epfd, &hevs[i], &ts_list) != 0) {
-            return -1;
-        }
-    }
-
     PRINTF_HIDE_CURSOR();
     printf("\n");
 
-    if (epoll_do_wait(epfd, fd_nums, &ts_list) == -1) {
-        return -1;
+    if (get_m3u8_file(&hevs[0]) != 0 ||
+            parse_m3u8(&hevs[0], &ts_list) != 0 ||
+            download_ts_files(hevs, &ts_list) != 0) {
+        util_exit();
     }
 
     if (!filename_out) {
@@ -152,8 +115,8 @@ int main(int argc, char **argv)
             log_error("main: fork failed");
             util_exit();
         case 0:
-            if (chdir(hev->buffer.dir) == -1) {
-                log_error("main: chdir '%s' failed", hev->buffer.dir);
+            if (chdir(hevs[0].buffer.dir) == -1) {
+                log_error("main: chdir '%s' failed", hevs[0].buffer.dir);
                 util_exit();
             }        
             merge_ts_files_task(FILE_TS_LIST, filename_out);
@@ -165,21 +128,21 @@ int main(int argc, char **argv)
     waitpid(child, &wstatus, 0);
 
     if (!WIFEXITED(wstatus)) {
-        log_error("main: child %d exit abnormal\n", child);        
+        log_error("main: child %d exit abnormal", child);        
     } else {
-        len = strlen(hev->buffer.dir) + strlen(filename_out) + 2;
+        len = strlen(hevs[0].buffer.dir) + strlen(filename_out) + 2;
         oldpath = util_calloc(sizeof(char), len);
         if (!oldpath) {
             util_exit();
         }
 
-        snprintf(oldpath, len, "%s/%s", hev->buffer.dir, filename_out);
+        snprintf(oldpath, len, "%s/%s", hevs[0].buffer.dir, filename_out);
         rename(oldpath, filename_out);
         remove(m3u8_file);
 
         memset(cmd, '\0', sizeof(cmd));
         memcpy(cmd, "rm -rf ", 7);
-        memcpy(cmd + 7, hev->buffer.dir, strlen(hev->buffer.dir));
+        memcpy(cmd + 7, hevs[0].buffer.dir, strlen(hevs[0].buffer.dir));
         system(cmd);
 
         free(oldpath);
@@ -188,6 +151,137 @@ int main(int argc, char **argv)
     }
 
     PRINTF_SHOW_CURSOR();
+
+    return 0;
+}
+
+static int get_m3u8_file(http_event_t *hev)
+{
+    if (http_parse_url(m3u8_url, hev) != 0) {
+        return -1;
+    }
+
+#ifdef USE_CURL
+    CURL *curl;
+    CURLcode ret;
+    http_buffer_t *buffer = &hev->buffer;
+    char path[256] = {'\0'};
+
+    curl = curl_easy_init();
+    if (curl == NULL) {
+        log_error("main: curl_easy_init() failed");
+        return -1;
+    }
+
+    if (http_get_file_name(hev) != 0) {
+        log_error("main: get file name failed, uri='%s'", hev->uri);
+        goto err;
+    }
+
+    if (strlen(buffer->dir) != 0) {
+        memcpy(path, buffer->dir, strlen(buffer->dir));
+        memcpy(&path[strlen(path)], "/", 1);
+        memcpy(&path[strlen(path)], buffer->file, strlen(buffer->file));
+    } else {
+        memcpy(path, buffer->file, strlen(buffer->file));
+    }
+
+    buffer->dst = open(path, O_CREAT|O_WRONLY|O_TRUNC, 0644);
+    if (buffer->dst == -1) {
+        log_error("http: open '%s' failed", path);
+        goto err;
+    }
+
+    curl_easy_setopt(curl, CURLOPT_TCP_KEEPALIVE, 1L);
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_handler);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buffer->dst);
+    curl_easy_setopt(curl, CURLOPT_URL, m3u8_url);
+
+    ret = curl_easy_perform(curl);
+    if (ret != CURLE_OK) {
+        log_error("main: curl_easy_perform() failed");
+        goto err;
+    }
+
+    if (buffer->dst != -1) {
+        close(buffer->dst);
+    }
+    curl_easy_cleanup(curl);
+    return 0;
+
+err:
+    if (buffer->dst != -1) {
+        close(buffer->dst);
+    }
+    curl_easy_cleanup(curl);
+    return -1;
+
+#else
+    if (http_connect_server(hev) != 0 ||
+           http_send_request(hev) != 0 ||
+           http_read_response(hev) != 0 ||
+           http_download_file(hev) != 0) {
+        return -1;
+    }
+
+    return 0;
+#endif
+}
+
+static int download_ts_files(http_event_t *hevs, ts_list_t *tslist)
+{
+    char *mark;
+    int i;
+
+    m3u8_file = util_calloc(sizeof(char), hevs[0].buffer.filename_len);
+    if (!m3u8_file) {
+        util_exit();
+    }
+    memcpy(m3u8_file, hevs[0].buffer.file, hevs[0].buffer.filename_len);
+
+    mark = strstr(hevs[0].uri, hevs[0].buffer.file);
+    memcpy(tslist->base_uri, hevs[0].uri, mark - hevs[0].uri - 1);
+
+#ifdef USE_CURL
+    for (i = 1; i < fd_nums; ++i) {
+        memcpy(hevs[i].buffer.dir, hevs[0].buffer.dir, strlen(hevs[0].buffer.dir));
+    }
+
+    return curl_download_ts_files(hevs, fd_nums, tslist);
+
+#else
+   int epfd;
+
+    if ((epfd = epoll_do_create(EPOLL_MAX_EVENTS)) == -1) {
+        return -1;
+    }
+
+    if (add_download_ts_event(epfd, &hevs[0], tslist) != 0) {
+        return -1;
+    }
+ 
+    for (i = 1; i < fd_nums; ++i) {
+        memcpy(hevs[i].buffer.dir, hevs[0].buffer.dir, strlen(hevs[0].buffer.dir));
+        memcpy(hevs[i].host, hevs[0].host, strlen(hevs[0].host));
+        memcpy(hevs[i].ip, hevs[0].ip, strlen(hevs[0].ip));
+        hevs[i].port = hevs[0].port;
+
+        if (http_connect_server(&hevs[i]) != 0) {
+            log_error("main: connect |%s:%d| failed", hevs[i].ip, hevs[i].port);
+            return -1;
+        }
+        
+        if (add_download_ts_event(epfd, &hevs[i], tslist) != 0) {
+            return -1;
+        }
+    }
+
+    if (epoll_do_wait(epfd, fd_nums, tslist) == -1) {
+        return -1;
+    }
+
+#endif
 
     return 0;
 }

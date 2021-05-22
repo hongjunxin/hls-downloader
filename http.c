@@ -33,7 +33,6 @@
 extern int errno;
 extern int h_errno;
 
-static int http_get_file_name(http_event_t *hev);
 static int http_save_file(http_event_t *hev);
 static int http_read_headers(http_event_t *hev);
 
@@ -376,7 +375,7 @@ done:
     return buffer->cnt == buffer->len ? 0 : -1;
 }
 
-static int http_get_file_name(http_event_t *hev)
+int http_get_file_name(http_event_t *hev)
 {
     char *p, *mark;
     http_buffer_t *buffer;
