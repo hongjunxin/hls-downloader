@@ -38,7 +38,6 @@ static char *m3u8_file = NULL;
 static char *filename_out = NULL;
 static int fd_nums = 20;
 static http_event_t *hevs;
-static int alarm_time = 10;
 
 #define FILE_TS_LIST "ts.list"
 #define DEFAULT_OUTPUT_FILE "output.mp4"
@@ -200,7 +199,7 @@ static int get_m3u8_file(http_event_t *hev)
 
     ret = curl_easy_perform(curl);
     if (ret != CURLE_OK) {
-        log_error("main: curl_easy_perform() failed");
+        log_error("main: curl_easy_perform() failed, error='%s'", curl_easy_strerror(ret));
         goto err;
     }
 
@@ -218,8 +217,11 @@ err:
     return -1;
 
 #else
-    if (http_connect_server(hev) != 0 ||
-           http_send_request(hev) != 0 ||
+    if (http_connect_server(hev) != 0) {
+        return -1;
+    }
+
+    if (http_send_request(hev) != 0 ||
            http_read_response(hev) != 0 ||
            http_download_file(hev) != 0) {
         return -1;
@@ -232,7 +234,7 @@ err:
 static int download_ts_files(http_event_t *hevs, ts_list_t *tslist)
 {
     char *mark;
-    int i;
+    int i, ret;
 
     m3u8_file = util_calloc(sizeof(char), hevs[0].buffer.filename_len);
     if (!m3u8_file) {
@@ -251,33 +253,40 @@ static int download_ts_files(http_event_t *hevs, ts_list_t *tslist)
     return curl_download_ts_files(hevs, fd_nums, tslist);
 
 #else
-   int epfd;
+    int epfd;
 
     if ((epfd = epoll_do_create(EPOLL_MAX_EVENTS)) == -1) {
         return -1;
     }
 
+    epoll_nonblocking(hevs[0].fd);
+    hevs[0].reuse_fd = 1;
+
     if (add_download_ts_event(epfd, &hevs[0], tslist) != 0) {
         return -1;
     }
- 
+
     for (i = 1; i < fd_nums; ++i) {
         memcpy(hevs[i].buffer.dir, hevs[0].buffer.dir, strlen(hevs[0].buffer.dir));
         memcpy(hevs[i].host, hevs[0].host, strlen(hevs[0].host));
         memcpy(hevs[i].ip, hevs[0].ip, strlen(hevs[0].ip));
         hevs[i].port = hevs[0].port;
+        hevs[i].use_ssl = hevs[0].use_ssl;
+        hevs[i].reuse_fd = 1;
 
         if (http_connect_server(&hevs[i]) != 0) {
             log_error("main: connect |%s:%d| failed", hevs[i].ip, hevs[i].port);
             return -1;
         }
         
+        epoll_nonblocking(hevs[i].fd);
+
         if (add_download_ts_event(epfd, &hevs[i], tslist) != 0) {
             return -1;
         }
     }
 
-    if (epoll_do_wait(epfd, fd_nums, tslist) == -1) {
+    if (epoll_do_wait(epfd, fd_nums, tslist, hevs) == -1) {
         return -1;
     }
 
@@ -472,7 +481,6 @@ static int add_download_ts_event(int epfd, http_event_t *hev, ts_list_t *ts_list
     struct epoll_event ev;
     char *ts;
 
-    epoll_nonblocking(hev->fd);
     ev.data.ptr = hev;
 
     ts = ts_list->get_ts_name(ts_list);
@@ -490,13 +498,13 @@ static int add_download_ts_event(int epfd, http_event_t *hev, ts_list_t *ts_list
         return -1;
     }
 
-    hev->handler[0].handler = http_send_request;
-    hev->handler[0].read = 0;
-    hev->handler[1].handler = http_read_response;
-    hev->handler[1].read = 1;
-    hev->handler[2].handler = http_download_file;
-    hev->handler[2].read = 1;
-    hev->handler[3].handler = NULL;
+    hev->handler[HTTP_SEND_REQUEST].handler = http_send_request;
+    hev->handler[HTTP_SEND_REQUEST].read = 0;
+    hev->handler[HTTP_READ_RESPONSE].handler = http_read_response;
+    hev->handler[HTTP_READ_RESPONSE].read = 1;
+    hev->handler[HTTP_DOWNLOAD_FILE].handler = http_download_file;
+    hev->handler[HTTP_DOWNLOAD_FILE].read = 1;
+    hev->handler[HTTP_DONE].handler = NULL;
 
     if (epoll_do_ctl(epfd, EPOLL_CTL_ADD, &ev) == -1) {
         return -1;

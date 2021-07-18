@@ -68,7 +68,7 @@ int curl_download_ts_files(http_event_t *hevs, int hevs_cnt, ts_list_t *tslist)
         if (transfers) {
             mc = curl_multi_poll(mhandle, NULL, 0, -1, NULL);
             if (mc != CURLM_OK) {
-                log_error("mcurl: curl_multi_poll() failed");
+                log_error("mcurl: curl_multi_poll() failed, error='%s'", curl_multi_strerror(mc));
                 goto end;
             }
         }

@@ -1,5 +1,7 @@
 TARGET = obj/dhls
-CFLAG = -g -fno-stack-protector -DUSE_CURL
+#CFLAG = -g -fno-stack-protector -DUSE_CURL
+CFLAG = -g -fno-stack-protector
+LDFLAG = -lssl -lcrypto -lcurl
 CC = gcc
 
 OBJ = obj/downloader.o \
@@ -18,7 +20,7 @@ prepare:
 	fi
 
 $(TARGET) : $(OBJ)
-	$(CC) $(OBJ) -lcurl -o $@
+	$(CC) $(OBJ) $(LDFLAG) -o $@
 
 obj/downloader.o : downloader.c $(HEADER)
 	$(CC) -c $(CFLAG) $< -o $@

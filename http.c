@@ -18,6 +18,10 @@
 #include <errno.h>
 #include <arpa/inet.h>
 #include <netdb.h>
+#include <openssl/crypto.h>
+#include <openssl/x509.h>
+#include <openssl/pem.h>
+#include <openssl/err.h>
 
 #include "log.h"
 #include "http.h"
@@ -35,14 +39,23 @@ extern int h_errno;
 
 static int http_save_file(http_event_t *hev);
 static int http_read_headers(http_event_t *hev);
+static int http_try_ssl_connect(http_event_t *hev);
 
 int http_connect_server(http_event_t *hev)
 {
     struct sockaddr_in svaddr;
     struct hostent* hostent;
-    char *addr;
     int cfd = -1;
-    int i, cnt, try_timer;
+    int i, cnt, try_timer, ret;
+
+    if (hev->use_ssl) {
+        if (http_try_ssl_connect(hev) == 0) {
+            return 0;
+        } else {
+            hev->use_ssl = 0;
+            log_info("http: ssl connection failed, try http");
+        }
+    }
 
     memset(&svaddr, 0, sizeof(svaddr));
     svaddr.sin_port = htons(hev->port);
@@ -112,6 +125,152 @@ err:
     return -1;
 }
 
+static int http_try_ssl_connect(http_event_t *hev)
+{
+    SSL *ssl = NULL;
+    SSL_CTX *ctx = NULL;
+    const SSL_METHOD *client_method;
+    X509 *server_cert;
+    int cfd = -1;
+    int err, i, cnt, try_timer;
+    const char *str;
+    struct hostent *hostent;
+    struct sockaddr_in svaddr;
+    
+    memset(&svaddr, 0, sizeof(svaddr));
+    svaddr.sin_port = htons(hev->port);
+    svaddr.sin_family = AF_INET;
+    
+    cfd = socket(AF_INET, SOCK_STREAM, 0);  /* lack AF_INET6 */
+    if (cfd == -1) {
+        log_error( "http: socket failed (errno=%d)", errno);
+        return -1;
+    }
+
+    if (hev->fd != -1) {
+        close(hev->fd);
+        hev->fd = -1;
+    }
+
+    if (hev->ssl != NULL) {
+        SSL_shutdown(hev->ssl);
+        SSL_free(hev->ssl);
+        hev->ssl = NULL;
+    }
+
+    if (hev->ssl_ctx != NULL) {
+        SSL_CTX_free(hev->ssl_ctx);
+        hev->ssl_ctx = NULL;
+    }
+
+    SSLeay_add_ssl_algorithms();
+    client_method = SSLv23_client_method();
+    SSL_load_error_strings();
+    ctx = SSL_CTX_new(client_method);
+
+    try_timer = 10;
+
+    if (strlen(hev->ip) != 0) {
+        if (inet_pton(AF_INET, hev->ip, &svaddr.sin_addr) == 1) {
+
+            log_debug("http: connecting %s |%s:%d|", hev->host, hev->ip, hev->port);
+
+            for (i = 0; i < try_timer; ++i) {
+                if (connect(cfd, (struct sockaddr *) &svaddr, sizeof(svaddr)) != 0) {
+                    sleep(1);
+                } else {
+                    hev->fd = cfd;
+                    ssl = SSL_new(ctx);
+                    SSL_set_fd(ssl, hev->fd);
+
+                    if (SSL_connect(ssl) != 1) {
+                        log_error("http: ssl connect failed");
+                        goto error;
+                    }
+                
+                    hev->ssl = ssl;
+                    hev->ssl_ctx = ctx;
+                    log_debug("http: connected");
+                    return 0;
+                }                
+            }
+        }
+    }
+
+    hostent = gethostbyname(hev->host);
+    if (!hostent) {
+        log_error("http: %s", hstrerror(h_errno));
+        goto error;
+    }        
+
+    for (i = 0; hostent->h_addr_list[i]; i++) {
+        svaddr.sin_addr = *(struct in_addr*) hostent->h_addr_list[i];
+        svaddr.sin_family = hostent->h_addrtype;
+        svaddr.sin_port = htons(443);
+        memset(hev->ip, '\0', sizeof(hev->ip));
+        inet_ntop(svaddr.sin_family, &svaddr.sin_addr, hev->ip, sizeof(hev->ip) - 1);
+
+        log_debug("http: connecting %s |%s:%d|", hev->host, hev->ip, 443);
+
+        for (cnt = 0; i < try_timer; ++cnt) {
+            if (connect(cfd, (struct sockaddr*) &svaddr, sizeof(svaddr)) != 0) {
+                sleep(1);
+            } else {
+                log_debug("http: connected");
+                hev->fd = cfd;
+                break;
+            }
+        }
+    }
+
+    ssl = SSL_new(ctx);
+    SSL_set_fd(ssl, hev->fd);
+
+    if (SSL_connect(ssl) != 1) {
+        log_error("http: ssl connect failed");
+        goto error;
+    }
+
+    log_debug("http: SSL endpoint created and handshake completed");
+
+    str = SSL_get_cipher(ssl);
+    if (strcmp(str, "(NONE)") == 0) {
+        log_info("http: ssl get cipher falid");
+        goto error;
+    }
+
+    server_cert = SSL_get_peer_certificate(ssl);
+    str = X509_NAME_oneline(X509_get_subject_name(server_cert), 0, 0);
+    log_debug("server's certificate subject: %s", str);
+    str = X509_NAME_oneline(X509_get_issuer_name(server_cert), 0, 0);
+    log_debug("server's certificate issuer: %s", str);
+
+    /* certificate verification would happen here */
+
+    X509_free(server_cert);
+
+    hev->ssl = ssl;
+    hev->ssl_ctx = ctx;
+    hev->port = 443;
+
+    return 0;
+
+error:
+    if (ssl != NULL) {
+        SSL_free(ssl);
+    }
+
+    if (ctx != NULL) {
+        SSL_CTX_free(ctx);
+    }
+
+    if (cfd != -1) {
+        close(cfd);
+    }
+
+    return -1;
+}
+
 int http_send_request(http_event_t *hev)
 {
     http_buffer_t *buffer;
@@ -120,6 +279,22 @@ int http_send_request(http_event_t *hev)
     buffer = &hev->buffer;
 
     if (!hev->doing) {
+        /* fix: clear socket received buffer */
+        if (hev->reuse_fd) {
+clear:
+            if (hev->use_ssl) {
+                ret = SSL_read(hev->ssl, buffer->buf, sizeof(buffer->buf));
+            } else {
+                ret = read(hev->fd, buffer->buf, sizeof(buffer->buf));
+            }
+
+            log_debug("http: clear socket received buffer(%ld bytes)", ret);
+
+            if (ret > 0) {
+                goto clear;
+            }
+        }
+
         memset(buffer->buf, '\0', sizeof(buffer->buf));
         snprintf(buffer->buf, sizeof(buffer->buf) - 1, REQUEST_HEAD, hev->uri, hev->host);
         buffer->len = strlen(buffer->buf);
@@ -128,11 +303,16 @@ int http_send_request(http_event_t *hev)
 
         hev->doing = 1;
 
-        log_debug("http: request\n%s", buffer->buf);
+        log_debug("\n\nhttp: request\n%s", buffer->buf);
     }
 
     while (buffer->cnt < buffer->len) {
-        ret = write(hev->fd, buffer->buf + buffer->cnt, buffer->len - buffer->cnt);
+        if (hev->use_ssl) {
+            ret = SSL_write(hev->ssl, buffer->buf + buffer->cnt, buffer->len - buffer->cnt);
+        } else {
+            ret = write(hev->fd, buffer->buf + buffer->cnt, buffer->len - buffer->cnt);
+        }
+        
         if (ret == -1) {
             if (errno == EAGAIN) {
                 return EAGAIN;
@@ -243,6 +423,7 @@ int http_download_file(http_event_t *hev)
 
     if (!hev->doing) {
         hev->doing = 1;
+        buffer->pre_cnt = 0;
 
         if (hev->headers_in.content_length == 0) {
             log_error("http: Content-Length is 0");
@@ -321,7 +502,19 @@ static int http_read_headers(http_event_t *hev)
     http_buffer_t *buffer = &hev->buffer;
 
     for (;;) {
-        ret = read(hev->fd, buffer->buf + buffer->cnt, sizeof(buffer->buf) - buffer->cnt);
+
+        if (buffer->cnt >= sizeof(buffer->buf)) {
+            log_info("http: response headers so large (more than %ldk)?",
+                sizeof(buffer->buf)/1024);
+            goto err;
+        }
+
+        if (hev->use_ssl) {
+            ret = SSL_read(hev->ssl, buffer->buf + buffer->cnt, sizeof(buffer->buf) - buffer->cnt);
+        } else {
+            ret = read(hev->fd, buffer->buf + buffer->cnt, sizeof(buffer->buf) - buffer->cnt);
+        }
+        
         if (ret == -1) {
             if (errno == EAGAIN) {
                 return EAGAIN;
@@ -357,7 +550,13 @@ static int http_save_file(http_event_t *hev)
 
     while (buffer->cnt < buffer->len) {
         memset(buf, '\0', sizeof(buf));
-        ret = read(hev->fd, buf, sizeof(buf));
+
+        if (hev->use_ssl) {
+            ret = SSL_read(hev->ssl, buf, sizeof(buf));
+        } else {
+            ret = read(hev->fd, buf, sizeof(buf));
+        }
+
         if (ret == -1) {
             return errno == EAGAIN ? EAGAIN : -1;
         } else if (ret == 0) {
@@ -427,8 +626,10 @@ int http_parse_url(char *url, http_event_t *hev)
 
     if (strstr(url, "https://") != NULL) {
         p2 = url + strlen("https://");
+        hev->use_ssl = 1;
     } else if (strstr(url, "http://") != NULL) {
         p2 = url + strlen("http://");
+        hev->use_ssl = 0;
     } else {
         log_error("-i '%s' without http(s)", url);
         return -1;
@@ -463,6 +664,13 @@ void http_free_event(http_event_t *hev)
     buffer = &hev->buffer;
 
     if (hev->fd != -1) {
+        if (hev->use_ssl) {
+            SSL_shutdown(hev->ssl);
+            SSL_free(hev->ssl);
+            SSL_CTX_free(hev->ssl_ctx);
+            hev->ssl = NULL;
+            hev->ssl_ctx = NULL;
+        }
         close(hev->fd);
         hev->fd = -1;
     }
