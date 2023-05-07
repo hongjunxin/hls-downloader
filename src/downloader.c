@@ -57,10 +57,14 @@ int main(int argc, char **argv)
     pid_t child;
     int wstatus;
 
+#if USE_FFMPEG
+
     if (check_file_exist("ffmpeg") == -1) {
         printf("error: 'ffmpeg' not found, install it at first.\n");
         return -1;
     }
+
+#endif
 
     sa.sa_handler = signal_handler;
     sigemptyset(&sa.sa_mask);
@@ -117,8 +121,12 @@ int main(int argc, char **argv)
             if (chdir(hevs[0].buffer.dir) == -1) {
                 log_error("main: chdir '%s' failed", hevs[0].buffer.dir);
                 util_exit();
-            }        
+            }
+#ifdef USE_FFMPEG
             merge_ts_files_task(FILE_TS_LIST, filename_out);
+#else
+            // todo: use libffmpeg to merget ts files
+#endif
             break;
         default:
             break;
@@ -160,7 +168,7 @@ static int get_m3u8_file(http_event_t *hev)
         return -1;
     }
 
-#ifdef USE_CURL
+#if USE_CURL
     CURL *curl;
     CURLcode ret;
     http_buffer_t *buffer = &hev->buffer;
@@ -245,7 +253,7 @@ static int download_ts_files(http_event_t *hevs, ts_list_t *tslist)
     mark = strstr(hevs[0].uri, hevs[0].buffer.file);
     memcpy(tslist->base_uri, hevs[0].uri, mark - hevs[0].uri - 1);
 
-#ifdef USE_CURL
+#if USE_CURL
     for (i = 1; i < fd_nums; ++i) {
         memcpy(hevs[i].buffer.dir, hevs[0].buffer.dir, strlen(hevs[0].buffer.dir));
     }
