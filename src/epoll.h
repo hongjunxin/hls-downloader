@@ -10,6 +10,7 @@
 #include <fcntl.h>
 #include "utility.h"
 #include "http.h"
+#include "media.h"
 
 #define EPOLL_MAX_EVENTS  100
 #define epoll_nonblocking(s)  fcntl(s, F_SETFL, fcntl(s, F_GETFL) | O_NONBLOCK)

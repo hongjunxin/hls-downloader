@@ -108,19 +108,3 @@ void util_exit(void)
     kill(getpid(), SIGQUIT);
     sleep(3);
 }
-
-void util_show_download_progress(ts_list_t *ts_list)
-{
-    char bar[52] = {'\0'};
-    int percent, i;
-
-    percent = ts_list->success * 100 / ts_list->ts_cnt;
-
-    for (i = 0; i < percent / 2; ++i) {
-        bar[i] = '=';
-    }
-    bar[i] = '>';
-
-    printf("download ts files... %%%d [%-51s] [%d/%d]\r", 
-        percent, bar, ts_list->success, ts_list->ts_cnt);
-}

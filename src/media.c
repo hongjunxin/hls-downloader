@@ -1,88 +1,77 @@
-/*
- * Copyright (c) hongjunxin
- */
-
-#include <string.h>
-#include <unistd.h>
-#include <stdlib.h>
-#include <fcntl.h>
 #include <errno.h>
-#include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
-#include <signal.h>
-#include <curl/curl.h>
-
-#include "log.h"
+#include "media.h"
 #include "http.h"
 #include "epoll.h"
-#include "utility.h"
 #include "mcurl.h"
+#include "log.h"
 
-static int parse_option(int argc, char **argv);
-static void set_log_level(char *level);
-static int parse_url(char *url, http_event_t *hev);
-static int get_m3u8_file(http_event_t *hev);
-static int parse_m3u8(http_event_t *hev, ts_list_t *ts_list);
+static int download_hls(char *m3u8_url, char *filename_out, int fd_nums);
+static int get_m3u8_file(http_event_t *hev, ts_list_t *ts_list);
+static int parse_m3u8_file(http_event_t *hev, ts_list_t *ts_list);
+static int download_ts_files(http_event_t *hevs, ts_list_t *tslist, int fd_nums);
 static int add_download_ts_event(int epfd, http_event_t *hev, ts_list_t *ts_list);
 static char* get_ts_file_name(ts_list_t *ts_list);
 static void merge_ts_files_task(char *desc_file, char *out_file);
-static int check_output_file_format(char *filename_out);
-static void signal_handler(int signo);
-static int check_file_exist(char *filename);
-static int download_ts_files(http_event_t *hevs, ts_list_t *tslist);
 
-extern int errno;
-static char *m3u8_url = NULL;
 static char *m3u8_file = NULL;
-static char *filename_out = NULL;
-static int fd_nums = 20;
-static http_event_t *hevs;
 
 #define FILE_TS_LIST "ts.list"
-#define DEFAULT_OUTPUT_FILE "output.mp4"
-
 #define PRINTF_HIDE_CURSOR() printf("\033[?25l")
 #define PRINTF_SHOW_CURSOR() printf("\033[?25h")
 
-int log_level = error;
-
-int main(int argc, char **argv)
+void util_show_download_progress(ts_list_t *ts_list)
 {
-    struct sigaction sa;
-    int epfd, i, len;
+    char bar[52] = {'\0'};
+    int percent, i;
+
+    percent = ts_list->success * 100 / ts_list->ts_cnt;
+
+    for (i = 0; i < percent / 2; ++i) {
+        bar[i] = '=';
+    }
+    bar[i] = '>';
+
+    printf("download ts files... %%%d [%-51s] [%d/%d]\r", 
+        percent, bar, ts_list->success, ts_list->ts_cnt);
+}
+
+int download_video(char *video_url, char *filename_out, int fd_nums)
+{
+    int i;
+    
+    i = strlen(video_url);
+    for (; i >= 0; i--) {
+        if (*(video_url + i) == '.') {
+            break;
+        }
+    }
+    if (i < 0) {
+        log_error("media: %s not a video url", video_url);
+        return -1;
+    }
+    
+    if (strcmp(video_url + i, ".m3u8") == 0) {
+        return download_hls(video_url, filename_out, fd_nums);
+    } else {
+        log_error("media: just support download m3u8 so far");
+        return -1;
+    }
+
+    return 0;
+}
+
+static int download_hls(char *m3u8_url, char *filename_out, int fd_nums)
+{
+    int epfd, i, len, ret;
+    http_event_t *hevs;
     char *oldpath;
     char cmd[256];
     ts_list_t ts_list;    
     pid_t child;
     int wstatus;
-
-#if USE_FFMPEG
-
-    if (check_file_exist("ffmpeg") == -1) {
-        printf("error: 'ffmpeg' not found, install it at first.\n");
-        return -1;
-    }
-
-#endif
-
-    sa.sa_handler = signal_handler;
-    sigemptyset(&sa.sa_mask);
-
-    if (sigaction(SIGINT, &sa, NULL) == -1 ||
-            sigaction(SIGQUIT, &sa, NULL) == -1) {
-        log_error("main: sigaction failed");
-        return -1;
-    }
-
-    if (parse_option(argc, argv) != 0) {
-        return -1;
-    }
-
-    if (m3u8_url == NULL) {
-        log_error("main: lack of '-i' parameter, '-h' option for help.");
-        return -1;
-    }
 
     memset(&ts_list, 0, sizeof(ts_list_t));
     ts_list.get_ts_name = get_ts_file_name;
@@ -92,7 +81,6 @@ int main(int argc, char **argv)
     if (!hevs) {
         return -1;
     }
-
     for (i = 0; i < fd_nums; ++i) {
         hevs[i].fd = -1;
         hevs[i].buffer.dst = -1;
@@ -101,25 +89,30 @@ int main(int argc, char **argv)
     PRINTF_HIDE_CURSOR();
     printf("\n");
 
-    if (get_m3u8_file(&hevs[0]) != 0 ||
-            parse_m3u8(&hevs[0], &ts_list) != 0 ||
-            download_ts_files(hevs, &ts_list) != 0) {
-        util_exit();
+    if (get_m3u8_file(&hevs[0], &ts_list) != 0) {
+        log_error("media: get m3u8 file failed");
+        return -1;
+    }
+    
+    if (parse_m3u8_file(&hevs[0], &ts_list) != 0) {
+        log_error("media: parse m3u8 file failed");
+        return -1;
     }
 
-    if (!filename_out) {
-        filename_out = DEFAULT_OUTPUT_FILE;
-    }    
+    if (download_ts_files(hevs, &ts_list, fd_nums) != 0) {
+        log_error("media: download ts files failed");
+        return -1;
+    }
 
     child = fork();
 
     switch (child) {
         case -1:
-            log_error("main: fork failed");
+            log_error("media: fork failed");
             util_exit();
         case 0:
             if (chdir(hevs[0].buffer.dir) == -1) {
-                log_error("main: chdir '%s' failed", hevs[0].buffer.dir);
+                log_error("media: chdir '%s' failed", hevs[0].buffer.dir);
                 util_exit();
             }
 #ifdef USE_FFMPEG
@@ -135,7 +128,7 @@ int main(int argc, char **argv)
     waitpid(child, &wstatus, 0);
 
     if (!WIFEXITED(wstatus)) {
-        log_error("main: child %d exit abnormal", child);        
+        log_error("media: child %d exit abnormal", child);        
     } else {
         len = strlen(hevs[0].buffer.dir) + strlen(filename_out) + 2;
         oldpath = util_calloc(sizeof(char), len);
@@ -158,13 +151,11 @@ int main(int argc, char **argv)
     }
 
     PRINTF_SHOW_CURSOR();
-
-    return 0;
 }
 
-static int get_m3u8_file(http_event_t *hev)
+static int get_m3u8_file(http_event_t *hev, ts_list_t *ts_list)
 {
-    if (http_parse_url(m3u8_url, hev) != 0) {
+    if (http_parse_url(ts_list->m3u8_url, hev) != 0) {
         return -1;
     }
 
@@ -176,12 +167,12 @@ static int get_m3u8_file(http_event_t *hev)
 
     curl = curl_easy_init();
     if (curl == NULL) {
-        log_error("main: curl_easy_init() failed");
+        log_error("media: curl_easy_init() failed");
         return -1;
     }
 
     if (http_get_file_name(hev) != 0) {
-        log_error("main: get file name failed, uri='%s'", hev->uri);
+        log_error("media: get file name failed, uri='%s'", hev->uri);
         goto err;
     }
 
@@ -207,7 +198,7 @@ static int get_m3u8_file(http_event_t *hev)
 
     ret = curl_easy_perform(curl);
     if (ret != CURLE_OK) {
-        log_error("main: curl_easy_perform() failed, error='%s'", curl_easy_strerror(ret));
+        log_error("media: curl_easy_perform() failed, error='%s'", curl_easy_strerror(ret));
         goto err;
     }
 
@@ -239,7 +230,7 @@ err:
 #endif
 }
 
-static int download_ts_files(http_event_t *hevs, ts_list_t *tslist)
+static int download_ts_files(http_event_t *hevs, ts_list_t *tslist, int fd_nums)
 {
     char *mark;
     int i, ret;
@@ -283,7 +274,7 @@ static int download_ts_files(http_event_t *hevs, ts_list_t *tslist)
         hevs[i].reuse_fd = 1;
 
         if (http_connect_server(&hevs[i]) != 0) {
-            log_error("main: connect |%s:%d| failed", hevs[i].ip, hevs[i].port);
+            log_error("media: connect |%s:%d| failed", hevs[i].ip, hevs[i].port);
             return -1;
         }
         
@@ -303,7 +294,7 @@ static int download_ts_files(http_event_t *hevs, ts_list_t *tslist)
     return 0;
 }
 
-static int parse_m3u8(http_event_t *hev, ts_list_t *ts_list)
+static int parse_m3u8_file(http_event_t *hev, ts_list_t *ts_list)
 {
 	int src = -1, dst = -1;
     char buffer[4096];
@@ -323,7 +314,7 @@ static int parse_m3u8(http_event_t *hev, ts_list_t *ts_list)
     }
 
     if (mkdir(path, 0644) == -1 && errno != EEXIST) {
-        log_error("main: mkdir '%s' failed", path);
+        log_error("media: mkdir '%s' failed", path);
         goto err;
     }
 
@@ -335,12 +326,12 @@ static int parse_m3u8(http_event_t *hev, ts_list_t *ts_list)
     memcpy(&path[strlen(path)], FILE_TS_LIST, strlen(FILE_TS_LIST));
 
 	if ((src = open(hev->buffer.file, O_RDONLY)) == -1) {
-        log_error("main: open '%s' failed", hev->buffer.file);
+        log_error("media: open '%s' failed", hev->buffer.file);
         goto err;
 	}
 
     if ((dst = open(path, O_CREAT|O_WRONLY|O_TRUNC, 0644)) == -1) {
-        log_error("main: open '%s' failed", path);
+        log_error("media: open '%s' failed", path);
         goto err;
     }
 
@@ -348,12 +339,12 @@ static int parse_m3u8(http_event_t *hev, ts_list_t *ts_list)
 
     for (;;) {
         if (lseek(src, cnt, SEEK_SET) == -1) {
-            log_error("main: lseek failed (errno=%d)", errno);
+            log_error("media: lseek failed (errno=%d)", errno);
             goto err;
         }
         ret = read(src, buffer, sizeof(buffer));
         if (ret == -1) {
-            log_error("main: read '%s' failed", hev->buffer.file);
+            log_error("media: read '%s' failed", hev->buffer.file);
             goto err;
         } else if (ret == 0) {
             break;
@@ -372,7 +363,7 @@ static int parse_m3u8(http_event_t *hev, ts_list_t *ts_list)
                     snprintf(line, ret, "file '%.*s'\n", (int) (i - mark), &buffer[mark]);
                     --ret; /* ignore '\0' */ 
                     if (ret != write(dst, line, ret)) {
-                        log_error("main: write '%s' failed", path);
+                        log_error("media: write '%s' failed", path);
                         goto err;
                     }
 
@@ -395,7 +386,7 @@ static int parse_m3u8(http_event_t *hev, ts_list_t *ts_list)
     }
 
     if (fsync(dst) != 0) {
-        log_error("main: fsync '%s' failed (errno=%d)", FILE_TS_LIST, errno);
+        log_error("media: fsync '%s' failed (errno=%d)", FILE_TS_LIST, errno);
         goto err;
     }    
 
@@ -413,112 +404,9 @@ err:
         close(dst);
     }
 
-    log_error("main: parse m3u8 file failed");
+    log_error("media: parse m3u8 file failed");
 
     return -1;
-}
-
-static int parse_option(int argc, char **argv)
-{
-    int ch;
-    
-    if (argc == 1) {
-        return 0;
-    }
-
-    while ((ch = getopt(argc, argv, "i:o:l:c:h")) != -1) {
-        switch (ch) {
-        case 'i':
-            m3u8_url = util_calloc(sizeof(char), strlen(optarg) + 1);
-            if (!m3u8_url) {
-                util_exit();
-            }
-            memcpy(m3u8_url, optarg, strlen(optarg));
-            break;
-        case 'o':
-            if (check_output_file_format(optarg) != 0) {
-                printf("warning! '%s' without valid format, use default output name '%s'\n", 
-                    optarg, DEFAULT_OUTPUT_FILE);
-                break;
-            }
-            filename_out = util_calloc(sizeof(char), strlen(optarg) + 1);
-            if (!filename_out) {
-                util_exit();
-            }
-            memcpy(filename_out, optarg, strlen(optarg));
-            break;
-        case 'l':
-            set_log_level(optarg);
-            break;
-        case 'c':
-            fd_nums = atoi(optarg);
-            if (fd_nums == 0) {
-                fd_nums = 10;
-            }
-            break;
-        case 'h':
-            printf("-i [m3u8 url]               eg: '-i https://example.com/hls/index.m3u8'\n"
-                   "-o [output path]            eg: '-o output.mp4'\n"   
-                   "-l [error|warn|info|debug]\n" 
-                   "-c [num]                    concurrent fd to download ts file\n"          
-                   "-h                          show this help\n");
-            exit(0);
-        case '?':
-            return -1;
-        }
-    }
-
-    return 0;
-}
-
-static void set_log_level(char *level)
-{
-    if (!strcmp(level, "error")) {
-        log_level = error;
-    } else if (!strcmp(level, "warn")) {
-        log_level = warn;
-    } else if (!strcmp(level, "info")) {
-        log_level = info;
-    } else if (!strcmp(level, "debug")) {
-        log_level = debug;
-    }
-}
-
-static int add_download_ts_event(int epfd, http_event_t *hev, ts_list_t *ts_list)
-{
-    struct epoll_event ev;
-    char *ts;
-
-    ev.data.ptr = hev;
-
-    ts = ts_list->get_ts_name(ts_list);
-    if (!ts) {
-        return 0;
-    }
-
-    memset(hev->uri, '\0', sizeof(hev->uri));
-    memcpy(hev->uri, ts_list->base_uri, strlen(ts_list->base_uri));
-    memcpy(&hev->uri[strlen(hev->uri)], "/", 1);
-    memcpy(&hev->uri[strlen(hev->uri)], ts, strlen(ts));
-
-    hev->handler = util_calloc(4, sizeof(http_handler_t));
-    if (!hev->handler) {
-        return -1;
-    }
-
-    hev->handler[HTTP_SEND_REQUEST].handler = http_send_request;
-    hev->handler[HTTP_SEND_REQUEST].read = 0;
-    hev->handler[HTTP_READ_RESPONSE].handler = http_read_response;
-    hev->handler[HTTP_READ_RESPONSE].read = 1;
-    hev->handler[HTTP_DOWNLOAD_FILE].handler = http_download_file;
-    hev->handler[HTTP_DOWNLOAD_FILE].read = 1;
-    hev->handler[HTTP_DONE].handler = NULL;
-
-    if (epoll_do_ctl(epfd, EPOLL_CTL_ADD, &ev) == -1) {
-        return -1;
-    }
-    
-    return 0;   
 }
 
 static char* get_ts_file_name(ts_list_t *ts_list)
@@ -561,77 +449,44 @@ static void merge_ts_files_task(char *desc_file, char *out_file)
     remove(out_file);
 
     if (execvp(cmd, argv) == -1) {
-        log_error("main: execvp '%s' failed", cmd);
+        log_error("media: execvp '%s' failed", cmd);
         util_exit();
     }
 }
 
-static int check_output_file_format(char *filename_out)
+static int add_download_ts_event(int epfd, http_event_t *hev, ts_list_t *ts_list)
 {
-    char *mark, **f;
-    char suffix[8] = {'\0'};
-    int i;
-    char *format[] = {"mp4", "mkv", "wmv", "rmvb", "mpg", "mpeg",
-        "3gp", "mov", "avi", "flv", "asf", "asx", NULL};
+    struct epoll_event ev;
+    char *ts;
 
-    mark = strstr(filename_out, ".");
-    if (!mark) {
+    ev.data.ptr = hev;
+
+    ts = ts_list->get_ts_name(ts_list);
+    if (!ts) {
+        return 0;
+    }
+
+    memset(hev->uri, '\0', sizeof(hev->uri));
+    memcpy(hev->uri, ts_list->base_uri, strlen(ts_list->base_uri));
+    memcpy(&hev->uri[strlen(hev->uri)], "/", 1);
+    memcpy(&hev->uri[strlen(hev->uri)], ts, strlen(ts));
+
+    hev->handler = util_calloc(4, sizeof(http_handler_t));
+    if (!hev->handler) {
         return -1;
     }
 
-    ++mark;
+    hev->handler[HTTP_SEND_REQUEST].handler = http_send_request;
+    hev->handler[HTTP_SEND_REQUEST].read = 0;
+    hev->handler[HTTP_READ_RESPONSE].handler = http_read_response;
+    hev->handler[HTTP_READ_RESPONSE].read = 1;
+    hev->handler[HTTP_DOWNLOAD_FILE].handler = http_download_file;
+    hev->handler[HTTP_DOWNLOAD_FILE].read = 1;
+    hev->handler[HTTP_DONE].handler = NULL;
 
-    for (i = 0; *mark != '\0' && i < sizeof(suffix) - 1; ++mark, ++i) {
-        suffix[i] = *mark;
-    }
-
-    if (strlen(suffix) == 0) {
+    if (epoll_do_ctl(epfd, EPOLL_CTL_ADD, &ev) == -1) {
         return -1;
     }
-
-    for (f = format; *f != NULL; ++f) {
-        if (strcmp(*f, suffix) == 0) {
-            return 0;
-        }
-    }
-
-    return -1;
-}
-
-static void signal_handler(int signo)
-{
-    if (signo == SIGINT || signo == SIGQUIT) {
-        PRINTF_SHOW_CURSOR();
-    }
-
-    exit(-1);
-}
-
-static int check_file_exist(char *filename)
-{
-    char *prefix[] = {"/bin", "/sbin", "/usr/bin", "/usr/sbin",
-            "/usr/local/bin", "/usr/local/sbin", NULL};
-
-    char **p;
-    char path[128];
-
-    for (p = prefix; *p != NULL; ++p) {
-        snprintf(path, strlen(*p) + strlen(filename) + 2, "%s/%s", *p, filename);
-        if (access(path, F_OK) == 0) {
-            return 0;
-        }
-    }
-
-    memset(path, '\0', sizeof(path));
-
-    for (p = prefix; *p != NULL; ++p) {
-        memcpy(&path[strlen(path)], *p, strlen(*p));
-        memcpy(&path[strlen(path)], ":", 1);
-    }
-
-    path[strlen(path) - 1] = '\0';
-
-    printf("error: '%s' not found in '%s'\n", filename, path);
-
-    return -1;
+    
+    return 0;   
 }

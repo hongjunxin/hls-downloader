@@ -11,7 +11,6 @@
 #include <errno.h>
 
 extern int log_level;
-extern int errno;
 
 static char date[128] = {'\0'};
 

@@ -2,15 +2,16 @@ cmake_minimum_required(VERSION 3.7)
 project(dhls VERSION 0.0.1)
 
 option(USE_CURL "Use libcurl instead of OpenSSL for https" OFF)
-option(USE_FFMPEG, "Use ffmpeg tool" OFF)
+option(USE_FFMPEG "Use ffmpeg tool" OFF)
 
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake/Modules)
 
 set(DHLS_SOURCES
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/downloader.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/main.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/epoll.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/utility.c)
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/utility.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/media.c)
 
 if(USE_CURL)
     list(APPEND DHLS_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/mcurl.c)
