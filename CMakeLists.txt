@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.7)
 project(dhls VERSION 0.0.1)
 
 option(USE_CURL "Use libcurl instead of OpenSSL for https" OFF)
-option(USE_FFMPEG "Use ffmpeg tool" OFF)
+option(USE_FFMPEG_TOOL "Use ffmpeg tool" OFF)
 
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake/Modules)
 
@@ -19,8 +19,8 @@ if(USE_CURL)
     find_package(Curl REQUIRED)
 endif()
 
-if(USE_FFMPEG)
-    add_compile_definitions(${PROJECT_NAME} PRIVATE USE_FFMPEG=1)
+if(USE_FFMPEG_TOOL)
+    add_compile_definitions(${PROJECT_NAME} PRIVATE USE_FFMPEG_TOOL=1)
 endif()
 
 find_package(OpenSSL REQUIRED)

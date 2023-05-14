@@ -37,7 +37,7 @@ int main(int argc, char **argv)
     struct sigaction sa;
     int ret;
 
-#if USE_FFMPEG
+#if USE_FFMPEG_TOOL
 
     if (check_file_exist("ffmpeg") == -1) {
         printf("error: 'ffmpeg' not found, install it at first.\n");

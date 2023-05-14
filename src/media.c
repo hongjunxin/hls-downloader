@@ -86,7 +86,7 @@ static int download_hls(char *m3u8_url, char *filename_out, int fd_nums)
         hevs[i].buffer.dst = -1;
     }
 
-    PRINTF_HIDE_CURSOR();
+    //PRINTF_HIDE_CURSOR();
     printf("\n");
 
     if (get_m3u8_file(&hevs[0], &ts_list) != 0) {
@@ -115,10 +115,10 @@ static int download_hls(char *m3u8_url, char *filename_out, int fd_nums)
                 log_error("media: chdir '%s' failed", hevs[0].buffer.dir);
                 util_exit();
             }
-#ifdef USE_FFMPEG
+#ifdef USE_FFMPEG_TOOL
             merge_ts_files_task(FILE_TS_LIST, filename_out);
 #else
-            // todo: use libffmpeg to merget ts files
+            // todo: use ffmpeg libav to merget ts files
 #endif
             break;
         default:
@@ -150,7 +150,7 @@ static int download_hls(char *m3u8_url, char *filename_out, int fd_nums)
         printf("\n\nmerge ts files done, save to '%s'\n", filename_out);        
     }
 
-    PRINTF_SHOW_CURSOR();
+    //PRINTF_SHOW_CURSOR();
 }
 
 static int get_m3u8_file(http_event_t *hev, ts_list_t *ts_list)
