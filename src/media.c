@@ -120,7 +120,7 @@ static int download_hls(char *m3u8_url, char *filename_out, int fd_nums)
 #else
             // todo: use ffmpeg libav to merget ts files
 #endif
-            break;
+            exit(0);
         default:
             break;
     }
@@ -313,7 +313,7 @@ static int parse_m3u8_file(http_event_t *hev, ts_list_t *ts_list)
             "%s", hev->buffer.file);
     }
 
-    if (mkdir(path, 0644) == -1 && errno != EEXIST) {
+    if (mkdir(path, 0755) == -1 && errno != EEXIST) {
         log_error("media: mkdir '%s' failed", path);
         goto err;
     }
@@ -325,6 +325,7 @@ static int parse_m3u8_file(http_event_t *hev, ts_list_t *ts_list)
     memcpy(&path[strlen(path)], "/", 1);
     memcpy(&path[strlen(path)], FILE_TS_LIST, strlen(FILE_TS_LIST));
 
+    // open m3u8 file
 	if ((src = open(hev->buffer.file, O_RDONLY)) == -1) {
         log_error("media: open '%s' failed", hev->buffer.file);
         goto err;
@@ -403,8 +404,6 @@ err:
     if (dst != -1) {
         close(dst);
     }
-
-    log_error("media: parse m3u8 file failed");
 
     return -1;
 }

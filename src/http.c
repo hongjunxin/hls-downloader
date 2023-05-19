@@ -125,6 +125,15 @@ err:
     return -1;
 }
 
+static void ssl_info_callback(const SSL *ssl, int where, int ret)
+{
+    if (where & SSL_CB_ALERT) {
+        if (ret != 256) {
+            log_error("http: TLS alert, %s", SSL_alert_desc_string_long(ret));
+        }
+    }
+}
+
 static int http_try_ssl_connect(http_event_t *hev)
 {
     SSL *ssl = NULL;
@@ -163,13 +172,16 @@ static int http_try_ssl_connect(http_event_t *hev)
         hev->ssl_ctx = NULL;
     }
 
-    SSLeay_add_ssl_algorithms();
-    client_method = SSLv23_client_method();
-    SSL_load_error_strings();
-    ctx = SSL_CTX_new(client_method);
+    ctx = SSL_CTX_new(TLS_client_method()); // version-flexible
+	SSL_CTX_set_options(ctx, SSL_OP_NO_SSLv3);
+	SSL_CTX_set_min_proto_version(ctx, TLS1_VERSION);
+	SSL_CTX_set_info_callback(ctx, ssl_info_callback);
+	SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, NULL);
 
     try_timer = 10;
 
+    // already got server ip
+    // todo: reuse fd?
     if (strlen(hev->ip) != 0) {
         if (inet_pton(AF_INET, hev->ip, &svaddr.sin_addr) == 1) {
 
@@ -183,6 +195,9 @@ static int http_try_ssl_connect(http_event_t *hev)
                     ssl = SSL_new(ctx);
                     SSL_set_fd(ssl, hev->fd);
 
+                    // When using the SSL_connect(3) or SSL_accept(3) routines, 
+                    // the correct handshake routines are automatically set. So needn't
+                    // call SSL_set_connect_state() explicitly
                     if (SSL_connect(ssl) != 1) {
                         log_error("http: ssl connect failed");
                         goto error;
@@ -218,11 +233,12 @@ static int http_try_ssl_connect(http_event_t *hev)
             } else {
                 log_debug("http: connected");
                 hev->fd = cfd;
-                break;
+                goto next;
             }
         }
     }
 
+next:
     ssl = SSL_new(ctx);
     SSL_set_fd(ssl, hev->fd);
 
@@ -244,8 +260,6 @@ static int http_try_ssl_connect(http_event_t *hev)
     log_debug("server's certificate subject: %s", str);
     str = X509_NAME_oneline(X509_get_issuer_name(server_cert), 0, 0);
     log_debug("server's certificate issuer: %s", str);
-
-    /* certificate verification would happen here */
 
     X509_free(server_cert);
 

@@ -52,10 +52,11 @@ typedef enum {
     if (log_level >= error) { \
         fprintf(stderr, "[error] "); \
         fprintf(stderr, msg, ##__VA_ARGS__); \
-        fprintf(stderr, "\n");  \
         if (errno != 0)  { \
-            perror("[error]");\
+            fprintf(stderr, ", errmsg: %s", strerror(errno)); \
+            errno = 0; \
         } \
+        fprintf(stderr, "\n"); \
     } \
 
 #define log_info(msg, ...) \
