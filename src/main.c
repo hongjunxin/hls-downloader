@@ -11,7 +11,6 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <signal.h>
-#include <curl/curl.h>
 
 #include "log.h"
 #include "utility.h"
