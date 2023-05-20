@@ -156,7 +156,7 @@ static int http_try_ssl_connect(http_event_t *hev)
     
     cfd = socket(AF_INET, SOCK_STREAM, 0);  /* lack AF_INET6 */
     if (cfd == -1) {
-        log_error( "http: socket failed (errno=%d)", errno);
+        log_error_errno( "http: socket failed");
         return -1;
     }
 

@@ -186,7 +186,7 @@ static int get_m3u8_file(http_event_t *hev, ts_list_t *ts_list)
 
     buffer->dst = open(path, O_CREAT|O_WRONLY|O_TRUNC, 0644);
     if (buffer->dst == -1) {
-        log_error("http: open '%s' failed", path);
+        log_error_errno("http: open '%s' failed", path);
         goto err;
     }
 
@@ -314,7 +314,7 @@ static int parse_m3u8_file(http_event_t *hev, ts_list_t *ts_list)
     }
 
     if (mkdir(path, 0755) == -1 && errno != EEXIST) {
-        log_error("media: mkdir '%s' failed", path);
+        log_error_errno("media: mkdir '%s' failed", path);
         goto err;
     }
 
@@ -327,12 +327,12 @@ static int parse_m3u8_file(http_event_t *hev, ts_list_t *ts_list)
 
     // open m3u8 file
 	if ((src = open(hev->buffer.file, O_RDONLY)) == -1) {
-        log_error("media: open '%s' failed", hev->buffer.file);
+        log_error_errno("media: open '%s' failed", hev->buffer.file);
         goto err;
 	}
 
     if ((dst = open(path, O_CREAT|O_WRONLY|O_TRUNC, 0644)) == -1) {
-        log_error("media: open '%s' failed", path);
+        log_error_errno("media: open '%s' failed", path);
         goto err;
     }
 
@@ -340,12 +340,12 @@ static int parse_m3u8_file(http_event_t *hev, ts_list_t *ts_list)
 
     for (;;) {
         if (lseek(src, cnt, SEEK_SET) == -1) {
-            log_error("media: lseek failed (errno=%d)", errno);
+            log_error_errno("media: lseek failed (errno=%d)", errno);
             goto err;
         }
         ret = read(src, buffer, sizeof(buffer));
         if (ret == -1) {
-            log_error("media: read '%s' failed", hev->buffer.file);
+            log_error_errno("media: read '%s' failed", hev->buffer.file);
             goto err;
         } else if (ret == 0) {
             break;
@@ -364,7 +364,7 @@ static int parse_m3u8_file(http_event_t *hev, ts_list_t *ts_list)
                     snprintf(line, ret, "file '%.*s'\n", (int) (i - mark), &buffer[mark]);
                     --ret; /* ignore '\0' */ 
                     if (ret != write(dst, line, ret)) {
-                        log_error("media: write '%s' failed", path);
+                        log_error_errno("media: write '%s' failed", path);
                         goto err;
                     }
 
@@ -387,7 +387,7 @@ static int parse_m3u8_file(http_event_t *hev, ts_list_t *ts_list)
     }
 
     if (fsync(dst) != 0) {
-        log_error("media: fsync '%s' failed (errno=%d)", FILE_TS_LIST, errno);
+        log_error_errno("media: fsync '%s' failed", FILE_TS_LIST);
         goto err;
     }    
 
@@ -448,7 +448,7 @@ static void merge_ts_files_task(char *desc_file, char *out_file)
     remove(out_file);
 
     if (execvp(cmd, argv) == -1) {
-        log_error("media: execvp '%s' failed", cmd);
+        log_error_errno("media: execvp '%s' failed", cmd);
         util_exit();
     }
 }

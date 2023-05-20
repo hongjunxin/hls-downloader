@@ -149,7 +149,7 @@ static CURL* curl_init_download_ts_handle(http_event_t *hev, ts_list_t *tslist, 
     }
 
     if ((buffer->dst = open(path, O_CREAT|O_WRONLY|O_TRUNC, 0644)) == -1) {
-        log_error("http: open '%s' failed", path);
+        log_error_errno("http: open '%s' failed", path);
         return NULL;
     }
 
