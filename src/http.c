@@ -20,6 +20,7 @@
 #include <netdb.h>
 #include <openssl/crypto.h>
 #include <openssl/x509.h>
+#include <openssl/x509v3.h>
 #include <openssl/pem.h>
 #include <openssl/err.h>
 
@@ -27,12 +28,15 @@
 #include "http.h"
 #include "utility.h"
 
+// todo: Accept-Encoding: identity
 #define REQUEST_HEAD \
-        "GET %s HTTP/1.1 \r\n"          \
-        "Accept: */* \r\n"              \
-        "Host: %s \r\n"                 \
-        "Connection: keep-alive \r\n"   \
-        "\r\n"                          \
+        "GET %s HTTP/1.1 \r\n"                      \
+        "User-Agent: Wget/1.20.3 (linux-gnu) \r\n"  \
+        "Accept: */* \r\n"                          \
+        "Accept-Encoding: identity \r\n"            \
+        "Host: %s \r\n"                             \
+        "Connection: Keep-Alive \r\n"               \
+        "\r\n"                                      \
 
 extern int errno;
 extern int h_errno;
@@ -40,6 +44,7 @@ extern int h_errno;
 static int http_save_file(http_event_t *hev);
 static int http_read_headers(http_event_t *hev);
 static int http_try_ssl_connect(http_event_t *hev);
+static int check_server_certificate(X509 *cert, char *host);
 
 int http_connect_server(http_event_t *hev)
 {
@@ -63,7 +68,7 @@ int http_connect_server(http_event_t *hev)
     
     cfd = socket(AF_INET, SOCK_STREAM, 0);  /* lack AF_INET6 */
     if (cfd == -1) {
-        log_error( "http: socket failed (errno=%d)", errno);
+        log_error_errno( "http: socket failed");
         goto err;        
     }
 
@@ -138,10 +143,9 @@ static int http_try_ssl_connect(http_event_t *hev)
 {
     SSL *ssl = NULL;
     SSL_CTX *ctx = NULL;
-    const SSL_METHOD *client_method;
     X509 *server_cert;
     int cfd = -1;
-    int err, i, cnt, try_timer;
+    int ret, i, cnt, try_timer;
     const char *str;
     struct hostent *hostent;
     struct sockaddr_in svaddr;
@@ -191,6 +195,7 @@ static int http_try_ssl_connect(http_event_t *hev)
                 if (connect(cfd, (struct sockaddr *) &svaddr, sizeof(svaddr)) != 0) {
                     sleep(1);
                 } else {
+                    log_debug("http: tcp connected");
                     hev->fd = cfd;
                     ssl = SSL_new(ctx);
                     SSL_set_fd(ssl, hev->fd);
@@ -205,7 +210,7 @@ static int http_try_ssl_connect(http_event_t *hev)
                 
                     hev->ssl = ssl;
                     hev->ssl_ctx = ctx;
-                    log_debug("http: connected");
+                    log_debug("http: ssl connected");
                     return 0;
                 }                
             }
@@ -231,7 +236,7 @@ static int http_try_ssl_connect(http_event_t *hev)
             if (connect(cfd, (struct sockaddr*) &svaddr, sizeof(svaddr)) != 0) {
                 sleep(1);
             } else {
-                log_debug("http: connected");
+                log_debug("http: tcp connected");
                 hev->fd = cfd;
                 goto next;
             }
@@ -247,7 +252,7 @@ next:
         goto error;
     }
 
-    log_debug("http: SSL endpoint created and handshake completed");
+    log_debug("http: ssl connected");
 
     str = SSL_get_cipher(ssl);
     if (strcmp(str, "(NONE)") == 0) {
@@ -257,11 +262,16 @@ next:
 
     server_cert = SSL_get_peer_certificate(ssl);
     str = X509_NAME_oneline(X509_get_subject_name(server_cert), 0, 0);
-    log_debug("server's certificate subject: %s", str);
+    log_debug("server certificate:");
+    log_debug("subject: %s", str);
     str = X509_NAME_oneline(X509_get_issuer_name(server_cert), 0, 0);
-    log_debug("server's certificate issuer: %s", str);
+    log_debug("issuer: %s", str);
 
+    ret = check_server_certificate(server_cert, hev->host);
     X509_free(server_cert);
+    if (ret == -1) {
+        goto error;
+    }
 
     hev->ssl = ssl;
     hev->ssl_ctx = ctx;
@@ -284,6 +294,107 @@ error:
 
     return -1;
 }
+
+static int check_name(char *host, ASN1_STRING *pattern)
+{
+    int slen, plen;
+    const char *s, *p, *mark;
+
+    s = host;
+    slen = strlen(host);
+    p = ASN1_STRING_get0_data(pattern);
+    plen = ASN1_STRING_length(pattern);
+
+    if (slen < plen) {
+        return -1;
+    }
+
+    if (slen == plen && strncmp(s, p, slen) == 0) {
+        return 0;
+    }
+
+    if (plen > 2 && p[0] == '*' && p[1] == '.') {
+        mark = p + 1;
+        s += slen - 1;
+        p += plen - 1;
+        for (; p > mark; p--, s--) {
+            if (*s != *p) {
+                return -1;
+            }
+        }
+        return 0;
+    }
+
+    return -1;
+}
+
+static int check_server_certificate(X509 *cert, char *host)
+{
+    GENERAL_NAME            *altname;
+    STACK_OF(GENERAL_NAME)  *altnames;
+    X509_NAME *sname;
+    X509_NAME_ENTRY *entry;
+    int n, i;
+    ASN1_STRING *str;
+
+    altnames = X509_get_ext_d2i(cert, NID_subject_alt_name, NULL, NULL);
+    if (altnames) {
+        // SubjectAltName maybe more than one
+        n = sk_GENERAL_NAME_num(altnames);
+        for (i = 0; i < n; i++) {
+            altname = sk_GENERAL_NAME_value(altnames, i);
+            if (altname->type != GEN_DNS) {
+                continue;
+            }
+            str = altname->d.dNSName;
+            if (check_name(host, str) == 0) {
+                log_debug("http: host \"%s\" matched cert's SubjectAltName \"%*s\"",
+                    host, ASN1_STRING_length(str), ASN1_STRING_get0_data(str));
+                log_debug("http: SSL certificate verify ok");
+                GENERAL_NAMES_free(altnames);
+                return 0;
+            }
+        }
+
+        log_error("http: host \"%s\" not matched cert's SubjectAltName \"%*s\"",
+            host, ASN1_STRING_length(str), ASN1_STRING_get0_data(str));
+        log_error("http: SSL certificate verify failed");
+        GENERAL_NAMES_free(altnames);
+        return -1;
+    }
+
+    sname = X509_get_subject_name(cert);
+    if (sname == NULL) {
+        log_error("http: get subject name failed");
+        return -1;
+    }
+
+    i = -1;
+    for ( ;; ) {
+        i = X509_NAME_get_index_by_NID(sname, NID_commonName, i);
+
+        if (i < 0) {
+            break;
+        }
+
+        entry = X509_NAME_get_entry(sname, i);
+        str = X509_NAME_ENTRY_get_data(entry);
+        log_debug("SSL commonName: %*s", ASN1_STRING_length(str), ASN1_STRING_get0_data(str));
+        if (check_name(host, str) == 0) {
+            log_debug("http: host \"%s\" matched cert's CommonName \"%*s\"",
+                host, ASN1_STRING_length(str), ASN1_STRING_get0_data(str));
+            log_debug("http: SSL certificate verify ok");
+            return 0;
+        }
+    }
+
+    log_error("http: host \"%s\" not matched cert's CommonName \"%*s\"",
+        host, ASN1_STRING_length(str), ASN1_STRING_get0_data(str));
+    log_error("http: SSL certificate verify failed");
+
+    return -1;
+}
+
 
 int http_send_request(http_event_t *hev)
 {

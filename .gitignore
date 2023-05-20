@@ -3,4 +3,5 @@
 obj
 build
 bin
-
+*.DS_Store
+download
