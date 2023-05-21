@@ -194,7 +194,7 @@ static int get_m3u8_file(http_event_t *hev, ts_list_t *ts_list)
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_handler);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buffer->dst);
-    curl_easy_setopt(curl, CURLOPT_URL, m3u8_url);
+    curl_easy_setopt(curl, CURLOPT_URL, ts_list->m3u8_url);
 
     ret = curl_easy_perform(curl);
     if (ret != CURLE_OK) {

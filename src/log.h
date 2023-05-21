@@ -65,6 +65,13 @@ typedef enum {
         fprintf(stderr, "\n"); \
     } \
 
+#define log_warn(msg, ...) \
+    if (log_level >= warn) { \
+        fprintf(stderr, "[warn] "); \
+        fprintf(stderr, msg, ##__VA_ARGS__); \
+        fprintf(stderr, "\n"); \
+    } \
+
 #define log_info(msg, ...) \
     if (log_level >= info) { \
         fprintf(stderr, "[info] "); \

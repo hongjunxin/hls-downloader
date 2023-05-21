@@ -23,6 +23,7 @@
 #include <openssl/x509v3.h>
 #include <openssl/pem.h>
 #include <openssl/err.h>
+#include <openssl/bio.h>
 
 #include "log.h"
 #include "http.h"
@@ -43,8 +44,9 @@ extern int h_errno;
 
 static int http_save_file(http_event_t *hev);
 static int http_read_headers(http_event_t *hev);
-static int http_try_ssl_connect(http_event_t *hev);
+static int http_ssl_connect(http_event_t *hev);
 static int check_server_certificate(X509 *cert, char *host);
+static void error_string(unsigned long err);
 
 int http_connect_server(http_event_t *hev)
 {
@@ -54,12 +56,7 @@ int http_connect_server(http_event_t *hev)
     int i, cnt, try_timer, ret;
 
     if (hev->use_ssl) {
-        if (http_try_ssl_connect(hev) == 0) {
-            return 0;
-        } else {
-            hev->use_ssl = 0;
-            log_info("http: ssl connection failed, try http");
-        }
+        return http_ssl_connect(hev);
     }
 
     memset(&svaddr, 0, sizeof(svaddr));
@@ -139,14 +136,96 @@ static void ssl_info_callback(const SSL *ssl, int where, int ret)
     }
 }
 
-static int http_try_ssl_connect(http_event_t *hev)
+static int do_ssl_connect(http_event_t *hev)
 {
     SSL *ssl = NULL;
     SSL_CTX *ctx = NULL;
     X509 *server_cert;
+    const char *str;
+    int ret, err;
+
+    ctx = SSL_CTX_new(TLS_client_method()); // version-flexible
+
+	SSL_CTX_set_options(ctx, SSL_OP_NO_SSLv3);
+	SSL_CTX_set_min_proto_version(ctx, TLS1_VERSION);
+	SSL_CTX_set_info_callback(ctx, ssl_info_callback);
+
+    // if use SSL_VERIFY_PEER option in SSL_CTX_set_verify()
+    // we needn't verify server certificate by ourself through
+    // check_server_certificate(server_cert, hev->host)
+    SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, NULL);
+
+    //SSL_CTX_set_read_ahead(ctx, 1);
+	//SSL_CTX_set_quiet_shutdown(ctx, 1);
+    //SSL_CTX_set_verify_depth(ctx, 2);
+
+    // we can call SSL_CTX_load_verify_locations(cert.pem) to specify CAfile,
+    // but here use the default system certificate trust store
+    if (!SSL_CTX_set_default_verify_paths(ctx)) {
+        log_warn("http: SSL root CA certificates unavailable");
+    }
+
+    ssl = SSL_new(ctx);
+    SSL_set_fd(ssl, hev->fd);
+
+    SSL_set_hostflags(ssl, 0);  // flags default 0
+    SSL_set1_host(ssl, hev->host);
+
+    // one IP can bind to more than one hostname
+    // in this case we should tell server which hostname we want to access.
+    SSL_set_tlsext_host_name(ssl, hev->host);
+    
+    // todo: this code block do what?
+    // BIO *in_bio, *out_bio;
+	// if (!(in_bio = BIO_new(BIO_s_mem())) || !(out_bio = BIO_new(BIO_s_mem()))) {
+    //     log_error("http: BIO_new() failed");
+    //     goto error;
+    // }
+	// BIO_set_mem_eof_return(in_bio, -1);
+	// BIO_set_mem_eof_return(out_bio, -1);
+	// SSL_set_bio(ssl, in_bio, out_bio);
+
+    // When using the SSL_connect(3) or SSL_accept(3) routines, 
+    // the correct handshake routines are automatically set. So needn't
+    // call SSL_set_connect_state() explicitly
+    ret = SSL_connect(ssl);
+    if (ret != 1) {
+        err = SSL_get_error(ssl, ret);  // err such as SSL_ERROR_SYSCALL
+        log_error("http: ssl connect failed, ret=%d, err=%d", ret, err);
+        error_string(err);
+        goto error;
+    }
+
+    if (log_level >= debug) {
+        server_cert = SSL_get_peer_certificate(ssl);
+        str = X509_NAME_oneline(X509_get_subject_name(server_cert), 0, 0);
+        log_debug("server certificate:");
+        log_debug("subject: %s", str);
+        str = X509_NAME_oneline(X509_get_issuer_name(server_cert), 0, 0);
+        log_debug("issuer: %s", str);
+        X509_free(server_cert);
+    }
+
+    hev->ssl = ssl;
+    hev->ssl_ctx = ctx;
+    return 0;
+
+error:
+    if (ssl != NULL) {
+        SSL_free(ssl);
+    }
+
+    if (ctx != NULL) {
+        SSL_CTX_free(ctx);
+    }
+    
+    return -1;
+}
+
+static int http_ssl_connect(http_event_t *hev)
+{
     int cfd = -1;
     int ret, i, cnt, try_timer;
-    const char *str;
     struct hostent *hostent;
     struct sockaddr_in svaddr;
     
@@ -176,12 +255,6 @@ static int http_try_ssl_connect(http_event_t *hev)
         hev->ssl_ctx = NULL;
     }
 
-    ctx = SSL_CTX_new(TLS_client_method()); // version-flexible
-	SSL_CTX_set_options(ctx, SSL_OP_NO_SSLv3);
-	SSL_CTX_set_min_proto_version(ctx, TLS1_VERSION);
-	SSL_CTX_set_info_callback(ctx, ssl_info_callback);
-	SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, NULL);
-
     try_timer = 10;
 
     // already got server ip
@@ -197,21 +270,13 @@ static int http_try_ssl_connect(http_event_t *hev)
                 } else {
                     log_debug("http: tcp connected");
                     hev->fd = cfd;
-                    ssl = SSL_new(ctx);
-                    SSL_set_fd(ssl, hev->fd);
 
-                    // When using the SSL_connect(3) or SSL_accept(3) routines, 
-                    // the correct handshake routines are automatically set. So needn't
-                    // call SSL_set_connect_state() explicitly
-                    if (SSL_connect(ssl) != 1) {
-                        log_error("http: ssl connect failed");
+                    if (do_ssl_connect(hev) == 0) {
+                        log_debug("http: ssl connected");
+                        return 0;
+                    } else {
                         goto error;
                     }
-                
-                    hev->ssl = ssl;
-                    hev->ssl_ctx = ctx;
-                    log_debug("http: ssl connected");
-                    return 0;
                 }                
             }
         }
@@ -226,11 +291,11 @@ static int http_try_ssl_connect(http_event_t *hev)
     for (i = 0; hostent->h_addr_list[i]; i++) {
         svaddr.sin_addr = *(struct in_addr*) hostent->h_addr_list[i];
         svaddr.sin_family = hostent->h_addrtype;
-        svaddr.sin_port = htons(443);
+        svaddr.sin_port = htons(hev->port);
         memset(hev->ip, '\0', sizeof(hev->ip));
         inet_ntop(svaddr.sin_family, &svaddr.sin_addr, hev->ip, sizeof(hev->ip) - 1);
 
-        log_debug("http: connecting %s |%s:%d|", hev->host, hev->ip, 443);
+        log_debug("http: connecting %s |%s:%d|", hev->host, hev->ip, hev->port);
 
         for (cnt = 0; i < try_timer; ++cnt) {
             if (connect(cfd, (struct sockaddr*) &svaddr, sizeof(svaddr)) != 0) {
@@ -244,54 +309,17 @@ static int http_try_ssl_connect(http_event_t *hev)
     }
 
 next:
-    ssl = SSL_new(ctx);
-    SSL_set_fd(ssl, hev->fd);
-
-    if (SSL_connect(ssl) != 1) {
-        log_error("http: ssl connect failed");
+    if (do_ssl_connect(hev) != 0) {
         goto error;
     }
-
     log_debug("http: ssl connected");
-
-    str = SSL_get_cipher(ssl);
-    if (strcmp(str, "(NONE)") == 0) {
-        log_info("http: ssl get cipher falid");
-        goto error;
-    }
-
-    server_cert = SSL_get_peer_certificate(ssl);
-    str = X509_NAME_oneline(X509_get_subject_name(server_cert), 0, 0);
-    log_debug("server certificate:");
-    log_debug("subject: %s", str);
-    str = X509_NAME_oneline(X509_get_issuer_name(server_cert), 0, 0);
-    log_debug("issuer: %s", str);
-
-    ret = check_server_certificate(server_cert, hev->host);
-    X509_free(server_cert);
-    if (ret == -1) {
-        goto error;
-    }
-
-    hev->ssl = ssl;
-    hev->ssl_ctx = ctx;
-    hev->port = 443;
-
     return 0;
 
 error:
-    if (ssl != NULL) {
-        SSL_free(ssl);
-    }
-
-    if (ctx != NULL) {
-        SSL_CTX_free(ctx);
-    }
-
     if (cfd != -1) {
         close(cfd);
+        hev->fd = -1;
     }
-
     return -1;
 }
 
@@ -395,6 +423,12 @@ static int check_server_certificate(X509 *cert, char *host)
     return -1;
 }
 
+static void error_string(unsigned long err)
+{
+	char buffer[256] = {'\0'};
+	ERR_error_string_n(err, buffer, 256);
+	log_error("http: ssl error \"%s\"", buffer);
+}
 
 int http_send_request(http_event_t *hev)
 {
@@ -771,7 +805,7 @@ int http_parse_url(char *url, http_event_t *hev)
 
     if (strlen(hev->host) == 0) {
         memcpy(hev->host, p1, p2 - p1);
-        hev->port = 80;
+        hev->port = (hev->use_ssl == 1) ? 443 : 80;
     } else {
         memcpy(p, p1, p2 - p1);
         hev->port = atoi(p);

@@ -1,6 +1,7 @@
 #ifndef _MCURL_H_
 #define _MCURL_H_
 
+#include <curl/curl.h>
 #include "http.h"
 #include "utility.h"
 #include "media.h"
