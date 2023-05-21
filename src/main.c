@@ -16,17 +16,19 @@
 #include "utility.h"
 #include "media.h"
 
-static int parse_option(int argc, char **argv);
+typedef struct config {
+    int fd_nums;
+    char *video_url;    // such as http://xxx/yy.m3u8 or http://xxx/yy.flv
+    char *filename_out;
+} config_t;
+
+static int parse_option(int argc, char **argv, config_t *conf);
 static void set_log_level(char *level);
 static int check_output_file_format(char *filename_out);
 static void signal_handler(int signo);
 static int check_file_exist(char *filename);
 
 extern int errno;
-static char *src_url = NULL;  // such as http://xxx/yy.m3u8 or http://xxx/yy.flv
-static char *filename_out = NULL;
-static int fd_nums = 20;
-
 #define DEFAULT_OUTPUT_FILE "output.mp4"
 
 int log_level = error;
@@ -35,6 +37,7 @@ int main(int argc, char **argv)
 {
     struct sigaction sa;
     int ret;
+    config_t config = {.fd_nums = 20, .video_url = NULL, .filename_out = NULL};
 
 #if USE_FFMPEG_TOOL
 
@@ -54,25 +57,20 @@ int main(int argc, char **argv)
         return -1;
     }
 
-    if (parse_option(argc, argv) != 0) {
+    if (parse_option(argc, argv, &config) != 0) {
         return -1;
     }
 
-    if (src_url == NULL) {
-        log_error("main: lack of '-i' parameter, '-h' option for help.");
-        return -1;
-    }
-
-    ret = download_video(src_url, filename_out, fd_nums);
+    ret = download_video(config.video_url, config.filename_out, config.fd_nums);
     if (ret == -1) {
-        log_error("main: download video from %s failed", src_url);
+        log_error("main: download video from %s failed", config.video_url);
         return -1;
     }
 
     return 0;
 }
 
-static int parse_option(int argc, char **argv)
+static int parse_option(int argc, char **argv, config_t *conf)
 {
     int ch;
     
@@ -83,32 +81,32 @@ static int parse_option(int argc, char **argv)
     while ((ch = getopt(argc, argv, "i:o:l:c:h")) != -1) {
         switch (ch) {
         case 'i':
-            src_url = util_calloc(sizeof(char), strlen(optarg) + 1);
-            if (!src_url) {
+            conf->video_url = util_calloc(sizeof(char), strlen(optarg) + 1);
+            if (!conf->video_url) {
                 util_exit();
             }
-            memcpy(src_url, optarg, strlen(optarg));
+            memcpy(conf->video_url, optarg, strlen(optarg));
             break;
         case 'o':
             if (check_output_file_format(optarg) != 0) {
                 printf("warning! '%s' without valid format, use default output name '%s'\n", 
                     optarg, DEFAULT_OUTPUT_FILE);
-                filename_out = util_calloc(sizeof(char), strlen(DEFAULT_OUTPUT_FILE) + 1);
+                conf->filename_out = DEFAULT_OUTPUT_FILE;
             } else {
-                filename_out = util_calloc(sizeof(char), strlen(optarg) + 1);
+                conf->filename_out = util_calloc(sizeof(char), strlen(optarg) + 1);
+                if (!conf->filename_out) {
+                    util_exit();
+                }
+                memcpy(conf->filename_out, optarg, strlen(optarg));
             }
-            if (!filename_out) {
-                util_exit();
-            }
-            memcpy(filename_out, optarg, strlen(optarg));
             break;
         case 'l':
             set_log_level(optarg);
             break;
         case 'c':
-            fd_nums = atoi(optarg);
-            if (fd_nums == 0) {
-                fd_nums = 10;
+            conf->fd_nums = atoi(optarg);
+            if (conf->fd_nums == 0) {
+                conf->fd_nums = 10;
             }
             break;
         case 'h':
@@ -121,6 +119,15 @@ static int parse_option(int argc, char **argv)
         case '?':
             return -1;
         }
+    }
+
+    if (conf->video_url == NULL) {
+        log_error("main: lack of '-i' parameter, '-h' option for help.");
+        return -1;
+    }
+
+    if (conf->filename_out == NULL) {
+        conf->filename_out = DEFAULT_OUTPUT_FILE;
     }
 
     return 0;
