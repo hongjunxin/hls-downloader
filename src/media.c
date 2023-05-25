@@ -2,6 +2,9 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <libavutil/timestamp.h>
+#include <libavformat/avformat.h>
+
 #include "media.h"
 #include "http.h"
 #include "epoll.h"
@@ -14,29 +17,12 @@ static int parse_m3u8_file(http_event_t *hev, ts_list_t *ts_list);
 static int download_ts_files(http_event_t *hevs, ts_list_t *tslist, int fd_nums);
 static int add_download_ts_event(int epfd, http_event_t *hev, ts_list_t *ts_list);
 static char* get_ts_file_name(ts_list_t *ts_list);
-static void merge_ts_files_task(char *desc_file, char *out_file);
+static void merge_ts_files_task(char *desc_file, char *out_file); // use ffmpeg tool
+static int merge_ts_files(const char *ts_list, int ts_nums, const char *out_filename); // use ffmpeg libav
 
 static char *m3u8_file = NULL;
 
 #define FILE_TS_LIST "ts.list"
-#define PRINTF_HIDE_CURSOR() printf("\033[?25l")
-#define PRINTF_SHOW_CURSOR() printf("\033[?25h")
-
-void util_show_download_progress(ts_list_t *ts_list)
-{
-    char bar[52] = {'\0'};
-    int percent, i;
-
-    percent = ts_list->success * 100 / ts_list->ts_cnt;
-
-    for (i = 0; i < percent / 2; ++i) {
-        bar[i] = '=';
-    }
-    bar[i] = '>';
-
-    printf("download ts files... %%%d [%-51s] [%d/%d]\r", 
-        percent, bar, ts_list->success, ts_list->ts_cnt);
-}
 
 int download_video(char *video_url, char *filename_out, int fd_nums)
 {
@@ -66,8 +52,8 @@ int download_video(char *video_url, char *filename_out, int fd_nums)
 static int download_hls(char *m3u8_url, char *filename_out, int fd_nums)
 {
     int epfd, i, len, ret;
-    http_event_t *hevs;
-    char *oldpath;
+    http_event_t *hevs = NULL;
+    char *oldpath = NULL;
     char cmd[256];
     ts_list_t ts_list;    
     pid_t child;
@@ -86,40 +72,36 @@ static int download_hls(char *m3u8_url, char *filename_out, int fd_nums)
         hevs[i].buffer.dst = -1;
     }
 
-    //PRINTF_HIDE_CURSOR();
     printf("\n");
 
     if (get_m3u8_file(&hevs[0], &ts_list) != 0) {
         log_error("media: get m3u8 file failed");
-        return -1;
+        goto error;
     }
     
     if (parse_m3u8_file(&hevs[0], &ts_list) != 0) {
         log_error("media: parse m3u8 file failed");
-        return -1;
+        goto error;
     }
 
     if (download_ts_files(hevs, &ts_list, fd_nums) != 0) {
         log_error("media: download ts files failed");
-        return -1;
+        goto error;
     }
 
-    child = fork();
+#if USE_FFMPEG_TOOL
 
+    child = fork();
     switch (child) {
         case -1:
             log_error("media: fork failed");
-            util_exit();
+            goto error;
         case 0:
             if (chdir(hevs[0].buffer.dir) == -1) {
                 log_error("media: chdir '%s' failed", hevs[0].buffer.dir);
-                util_exit();
+                return -1;
             }
-#ifdef USE_FFMPEG_TOOL
             merge_ts_files_task(FILE_TS_LIST, filename_out);
-#else
-            // todo: use ffmpeg libav to merget ts files
-#endif
             exit(0);
         default:
             break;
@@ -128,29 +110,51 @@ static int download_hls(char *m3u8_url, char *filename_out, int fd_nums)
     waitpid(child, &wstatus, 0);
 
     if (!WIFEXITED(wstatus)) {
-        log_error("media: child %d exit abnormal", child);        
-    } else {
-        len = strlen(hevs[0].buffer.dir) + strlen(filename_out) + 2;
-        oldpath = util_calloc(sizeof(char), len);
-        if (!oldpath) {
-            util_exit();
-        }
-
-        snprintf(oldpath, len, "%s/%s", hevs[0].buffer.dir, filename_out);
-        rename(oldpath, filename_out);
-        remove(m3u8_file);
-
-        memset(cmd, '\0', sizeof(cmd));
-        memcpy(cmd, "rm -rf ", 7);
-        memcpy(cmd + 7, hevs[0].buffer.dir, strlen(hevs[0].buffer.dir));
-        system(cmd);
-
-        free(oldpath);
-
-        printf("\n\nmerge ts files done, save to '%s'\n", filename_out);        
+        log_error("media: child %d exit abnormal", child);
+        goto error;
+    }
+#else
+    // cd to ts files directory
+    if (chdir(hevs[0].buffer.dir) == -1) {
+        log_error_errno("media: chdir '%s' failed", hevs[0].buffer.dir);
+        goto error;
+    }
+    if (merge_ts_files(FILE_TS_LIST, ts_list.ts_cnt, filename_out) == -1) {
+        log_error("media: merge ts file failed");
+        goto error;
+    }
+    if (chdir("../") == -1) {
+        log_error_errno("media: chdir '../' failed");
+        goto error;
     }
 
-    //PRINTF_SHOW_CURSOR();
+#endif
+
+    len = strlen(hevs[0].buffer.dir) + strlen(filename_out) + 2;
+    oldpath = util_calloc(sizeof(char), len);
+    if (!oldpath) {
+        goto error;
+    }
+
+    snprintf(oldpath, len, "%s/%s", hevs[0].buffer.dir, filename_out);
+    rename(oldpath, filename_out);
+    remove(m3u8_file);
+
+    memset(cmd, '\0', sizeof(cmd));
+    memcpy(cmd, "rm -rf ", 7);
+    memcpy(cmd + 7, hevs[0].buffer.dir, strlen(hevs[0].buffer.dir));
+    system(cmd);
+
+    free(oldpath);
+
+    printf("merge ts files done, save to '%s'\n", filename_out);  
+    return 0;
+
+error:
+    if (hevs) {
+        free(hevs);
+    }
+    return -1;
 }
 
 static int get_m3u8_file(http_event_t *hev, ts_list_t *ts_list)
@@ -237,7 +241,7 @@ static int download_ts_files(http_event_t *hevs, ts_list_t *tslist, int fd_nums)
 
     m3u8_file = util_calloc(sizeof(char), hevs[0].buffer.filename_len);
     if (!m3u8_file) {
-        util_exit();
+        return -1;
     }
     memcpy(m3u8_file, hevs[0].buffer.file, hevs[0].buffer.filename_len);
 
@@ -449,7 +453,6 @@ static void merge_ts_files_task(char *desc_file, char *out_file)
 
     if (execvp(cmd, argv) == -1) {
         log_error_errno("media: execvp '%s' failed", cmd);
-        util_exit();
     }
 }
 
@@ -488,4 +491,239 @@ static int add_download_ts_event(int epfd, http_event_t *hev, ts_list_t *ts_list
     }
     
     return 0;   
+}
+
+static int copy_packet(AVFormatContext *in_format_ctx, 
+                            AVFormatContext *out_format_ctx,
+                            int *streams_list)
+{
+    AVPacket packet;
+    AVStream *in_stream, *out_stream;
+    int ret;
+    int number_of_streams = in_format_ctx->nb_streams;
+
+    for (;;) {
+        ret = av_read_frame(in_format_ctx, &packet);
+        if (ret < 0) {
+            break;
+        }
+        in_stream = in_format_ctx->streams[packet.stream_index];
+        if (packet.stream_index >= number_of_streams || streams_list[packet.stream_index] < 0) {
+            av_packet_unref(&packet);
+            continue;
+        }
+        packet.stream_index = streams_list[packet.stream_index];
+        out_stream = out_format_ctx->streams[packet.stream_index];
+        /* copy packet */
+        packet.pts = av_rescale_q_rnd(packet.pts, in_stream->time_base, out_stream->time_base, AV_ROUND_NEAR_INF|AV_ROUND_PASS_MINMAX);
+        packet.dts = av_rescale_q_rnd(packet.dts, in_stream->time_base, out_stream->time_base, AV_ROUND_NEAR_INF|AV_ROUND_PASS_MINMAX);
+        packet.duration = av_rescale_q(packet.duration, in_stream->time_base, out_stream->time_base);
+        // https://ffmpeg.org/doxygen/trunk/structAVPacket.html#ab5793d8195cf4789dfb3913b7a693903
+        packet.pos = -1;
+
+        //https://ffmpeg.org/doxygen/trunk/group__lavf__encoding.html#ga37352ed2c63493c38219d935e71db6c1
+        ret = av_interleaved_write_frame(out_format_ctx, &packet);
+        if (ret < 0) {
+            log_error("media: muxing packet error");
+            av_packet_unref(&packet);
+            return -1;
+        }
+        av_packet_unref(&packet);
+    }
+    return 0;
+}
+
+static int get_ts_filename(int fd, char *buffer, int buf_size)
+{
+    int ret, i = 0;
+
+    lseek(fd, strlen("file '"), SEEK_CUR);
+
+    for (;;) {
+        ret = read(fd, buffer + i, 1);
+        if (ret != 1) {
+            log_error_errno("media: read failed");
+            return -1;
+        }
+        if (buffer[i] == '\'') {
+            read(fd, buffer + i, 1); // read '\n' at line end
+            buffer[i] = '\0';
+            break;
+        }
+        if (++i >= buf_size) {
+            log_error("media: read failed, buffer size not enough");
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static int merge_ts_files(const char *ts_list, int ts_nums, const char *out_filename)
+{
+    AVFormatContext *in_format_ctx = NULL, *out_format_ctx = NULL;
+    int i, fd = -1, ret = -1;
+    int stream_index = 0;
+    int number_of_streams = 0;
+    int *streams_list = NULL;
+    char in_filename[128] = {'\0'};
+
+    fd = open(ts_list, O_RDONLY);
+    if (fd == -1) {
+        log_error_errno("media: open '%s' failed", ts_list);
+        return -1;
+    }
+
+    ret = get_ts_filename(fd, in_filename, sizeof(in_filename));
+    if (ret == -1) {
+        log_error("media: get ts filename from '%s' failed", ts_list);
+        goto end;
+    }
+
+    ret = avformat_open_input(&in_format_ctx, in_filename, NULL, NULL);
+    if (ret < 0) {
+        log_error("media: avformat_open_input() open file '%s' failed", in_filename);
+        goto end;
+    }
+
+    ret = avformat_find_stream_info(in_format_ctx, NULL);
+    if (ret < 0) {
+        log_error("media: avformat_find_stream_info() from '%s' failed", in_filename);
+        goto end;
+    }
+
+    avformat_alloc_output_context2(&out_format_ctx, NULL, NULL, out_filename);
+    if (out_format_ctx == NULL) {
+        log_error("media: avformat_alloc_output_context2() failed");
+        ret = AVERROR_UNKNOWN;
+        goto end;
+    }
+
+    number_of_streams = in_format_ctx->nb_streams;
+    streams_list = av_malloc_array(number_of_streams, sizeof(*streams_list));
+    memset(streams_list, 0, number_of_streams * sizeof(*streams_list));
+
+    if (streams_list == NULL) {
+        ret = AVERROR(ENOMEM);
+        goto end;
+    }
+
+    for (i = 0; i < in_format_ctx->nb_streams; i++) {
+        AVStream *out_stream;
+        AVStream *in_stream = in_format_ctx->streams[i];
+        AVCodecParameters *in_codecpar = in_stream->codecpar;
+
+        if (in_codecpar->codec_type != AVMEDIA_TYPE_AUDIO &&
+                in_codecpar->codec_type != AVMEDIA_TYPE_VIDEO &&
+                in_codecpar->codec_type != AVMEDIA_TYPE_SUBTITLE) {
+            streams_list[i] = -1;
+            continue;
+        }
+
+        streams_list[i] = stream_index++;
+        out_stream = avformat_new_stream(out_format_ctx, NULL);
+        if (out_stream == NULL) {
+            log_error("media: avformat_new_stream() for output stream failed");
+            ret = AVERROR_UNKNOWN;
+            goto end;
+        }
+
+        ret = avcodec_parameters_copy(out_stream->codecpar, in_codecpar);
+        if (ret < 0) {
+            log_error("media: failed to copy odec parameters");
+            goto end;
+        }
+        out_stream->codecpar->codec_tag = 0;
+    }
+
+    // https://ffmpeg.org/doxygen/trunk/group__lavf__misc.html#gae2645941f2dc779c307eb6314fd39f10
+    av_dump_format(out_format_ctx, 0, out_filename, 1);
+
+    // unless it's a no file (we'll talk later about that) write to the disk (FLAG_WRITE)
+    // but basically it's a way to save the file to a buffer so you can store it
+    // wherever you want.
+    if (!(out_format_ctx->oformat->flags & AVFMT_NOFILE)) {
+        ret = avio_open(&out_format_ctx->pb, out_filename, AVIO_FLAG_WRITE);
+        if (ret < 0) {
+            log_error("media: open output file '%s' failed", out_filename);
+            goto end;
+        }
+    }
+
+    AVDictionary* opts = NULL;
+    // optional manipulation
+    // https://developer.mozilla.org/en-US/docs/Web/API/Media_Source_Extensions_API/Transcoding_assets_for_MSE
+    // jaxon: cause error "Malformed AAC bitstream detected: use the audio bitstream filter 'aac_adtstoasc' 
+    // to fix it ('-bsf:a aac_adtstoasc' option with ffmpeg)" if add this option
+    //av_dict_set(&opts, "movflags", "frag_keyframe+empty_moov+default_base_moof", 0);
+
+    // https://ffmpeg.org/doxygen/trunk/group__lavf__encoding.html#ga18b7b10bb5b94c4842de18166bc677cb
+    ret = avformat_write_header(out_format_ctx, &opts);
+    if (ret < 0) {
+        log_error("media: avformat_write_header() for '%s' failed", out_filename);
+        goto end;
+    }
+
+    ret = copy_packet(in_format_ctx, out_format_ctx, streams_list);
+    avformat_close_input(&in_format_ctx);
+    if (ret == -1) {
+        log_error("media: copy '%s' to '%s' failed", in_filename, out_filename);
+        goto end;
+    } else {
+        int total = ts_nums;
+        for (--ts_nums; ts_nums > 0; --ts_nums) {
+            util_show_progress("merge ts files...", total - ts_nums, total);
+            ret = get_ts_filename(fd, in_filename, sizeof(in_filename));
+            if (ret == -1) {
+                log_error("media: get ts filename failed");
+                goto end;
+            }
+            ret = avformat_open_input(&in_format_ctx, in_filename, NULL, NULL);
+            if (ret < 0) {
+                log_error("media: open '%s' failed", in_filename);
+                goto end;
+            }
+            ret = avformat_find_stream_info(in_format_ctx, NULL);
+            if (ret < 0) {
+                log_error("media: avformat_find_stream_info() from '%s' failed", in_filename);
+                goto end;
+            }
+            ret = copy_packet(in_format_ctx, out_format_ctx, streams_list);
+            avformat_close_input(&in_format_ctx);
+            if (ret == -1) {
+                log_error("media: copy '%s' to '%s' failed", in_filename, out_filename);
+                goto end;
+            }
+        }
+        util_show_progress("merge ts files...", total, total);
+        printf("\n");
+    }
+
+    //https://ffmpeg.org/doxygen/trunk/group__lavf__encoding.html#ga7f14007e7dc8f481f054b21614dfec13
+    ret = av_write_trailer(out_format_ctx);
+    if (ret < 0) {
+        log_error("media: av_write_trailer() for '%s' failed", out_filename);
+        goto end;
+    }
+
+end:
+    if (fd != -1) {
+        close(fd);
+    }
+
+    if (out_format_ctx) {
+        if (!(out_format_ctx->oformat->flags & AVFMT_NOFILE)) {
+            avio_closep(&out_format_ctx->pb);
+        }
+        avformat_free_context(out_format_ctx);
+    }
+
+    av_freep(&streams_list);
+    if (ret == -1) {
+        return ret;
+    }
+    if (ret < 0 && ret != AVERROR_EOF) {
+        log_error("media: libav error \"%s\"", av_err2str(ret));
+        return -1;
+    }
+    return 0;
 }

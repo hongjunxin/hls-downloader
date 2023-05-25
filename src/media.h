@@ -19,6 +19,5 @@ typedef struct ts_list {
 } ts_list_t;
 
 int download_video(char *video_url, char *filename_out, int fd_nums);
-void util_show_download_progress(ts_list_t *ts_list);
 
 #endif

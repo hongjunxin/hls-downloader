@@ -10,6 +10,8 @@
 #include <string.h>
 
 #define util_min(val1, val2)    ((val1) < (val2) ? (val1) : (val2))
+#define PRINTF_HIDE_CURSOR() printf("\033[?25l")
+#define PRINTF_SHOW_CURSOR() printf("\033[?25h")
 
 typedef struct list_part {
     void *elts;
@@ -29,6 +31,6 @@ void *util_calloc(size_t nmemb, size_t size);
 void *util_list_push(list_t *l);
 list_t *util_create_list(int size, int nalloc);
 char *util_str_begin_with(char *haystack, char *needle, size_t len);
-void util_exit(void);
+void util_show_progress(const char *hint, int done, int total);
 
 #endif

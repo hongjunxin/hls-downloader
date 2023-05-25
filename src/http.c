@@ -556,7 +556,7 @@ int http_read_response(http_event_t *hev)
             hev->headers_in.content_length = atoi(buf);
         } else if (!strstr(line, ": ")) {
             log_error("http: header format error");
-            util_exit();
+            return -1;
         }
     }
 
@@ -586,7 +586,7 @@ int http_download_file(http_event_t *hev)
 
         if (hev->headers_in.content_length == 0) {
             log_error("http: Content-Length is 0");
-            util_exit();
+            return -1;
         }
 
         if (http_get_file_name(hev) != 0) {

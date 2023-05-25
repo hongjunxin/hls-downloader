@@ -8,6 +8,22 @@
 #include "utility.h"
 #include "log.h"
 
+void util_show_progress(const char *hint, int done, int total)
+{
+    char bar[52] = {'\0'};
+    int percent, i;
+
+    percent = done * 100 / total;
+
+    for (i = 0; i < percent / 2; ++i) {
+        bar[i] = '=';
+    }
+    bar[i] = '>';
+
+    printf("%s %%%d [%-51s] [%d/%d]\r", 
+        hint, percent, bar, done, total);
+}
+
 void *util_calloc(size_t nmemb, size_t size)
 {
     void *ret;
@@ -101,10 +117,4 @@ char *util_str_begin_with(char *haystack, char *needle, size_t len)
     }
 
     return ret;
-}
-
-void util_exit(void)
-{
-    kill(getpid(), SIGQUIT);
-    sleep(3);
 }

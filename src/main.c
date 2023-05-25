@@ -61,13 +61,14 @@ int main(int argc, char **argv)
         return -1;
     }
 
+    PRINTF_HIDE_CURSOR();
     ret = download_video(config.video_url, config.filename_out, config.fd_nums);
     if (ret == -1) {
         log_error("main: download video from %s failed", config.video_url);
-        return -1;
     }
 
-    return 0;
+    PRINTF_SHOW_CURSOR();
+    return ret;
 }
 
 static int parse_option(int argc, char **argv, config_t *conf)
@@ -83,7 +84,7 @@ static int parse_option(int argc, char **argv, config_t *conf)
         case 'i':
             conf->video_url = util_calloc(sizeof(char), strlen(optarg) + 1);
             if (!conf->video_url) {
-                util_exit();
+                return -1;
             }
             memcpy(conf->video_url, optarg, strlen(optarg));
             break;
@@ -95,7 +96,7 @@ static int parse_option(int argc, char **argv, config_t *conf)
             } else {
                 conf->filename_out = util_calloc(sizeof(char), strlen(optarg) + 1);
                 if (!conf->filename_out) {
-                    util_exit();
+                    return -1;
                 }
                 memcpy(conf->filename_out, optarg, strlen(optarg));
             }
@@ -181,7 +182,7 @@ static int check_output_file_format(char *filename_out)
 static void signal_handler(int signo)
 {
     if (signo == SIGINT || signo == SIGQUIT) {
-        //PRINTF_SHOW_CURSOR();
+        PRINTF_SHOW_CURSOR();
     }
 
     exit(-1);

@@ -35,7 +35,7 @@ int epoll_do_wait(int epfd, int event_cnt, ts_list_t *ts_list, http_event_t *hev
     int nfds, n, ret;
     char *ts;
 
-    util_show_download_progress(ts_list);
+    util_show_progress("download ts files...", ts_list->success, ts_list->ts_cnt);
 
     for (;;) {
 
@@ -62,7 +62,9 @@ int epoll_do_wait(int epfd, int event_cnt, ts_list_t *ts_list, http_event_t *hev
 
                 if (hevs[n].buffer.pre_cnt == hevs[n].buffer.cnt) {
                     log_error("epoll: download time so long, reconnect.");
-                    reset_epoll_event(epfd, &events[n]);
+                    if (reset_epoll_event(epfd, &events[n]) == -1) {
+                        return -1;
+                    }
                 } else {
                     hevs[n].buffer.pre_cnt = hevs[n].buffer.cnt;
                 }
@@ -83,7 +85,7 @@ int epoll_do_wait(int epfd, int event_cnt, ts_list_t *ts_list, http_event_t *hev
                     }                    
                 } else {
                     ts_list->success++;
-                    util_show_download_progress(ts_list);
+                    util_show_progress("download ts files...", ts_list->success, ts_list->ts_cnt);
 
                     ts = ts_list->get_ts_name(ts_list);
                     if (ts) {
@@ -102,11 +104,14 @@ int epoll_do_wait(int epfd, int event_cnt, ts_list_t *ts_list, http_event_t *hev
                 hev->again_timer++;
             } else {
                 log_info("epoll: handle '%s' failed, handler=%d fd=%d, retry", hev->uri, hev->current, hev->fd);
-                reset_epoll_event(epfd, &events[n]);
+                if (reset_epoll_event(epfd, &events[n]) == -1) {
+                    return -1;
+                }
             }
         }
 
         if (ts_list->success + ts_list->failure == ts_list->ts_cnt) {
+            printf("\n");
             log_info("epoll: download all ts file done");
             return 0;
         }
@@ -129,8 +134,8 @@ static int reset_epoll_event(int epfd, struct epoll_event *ev)
     epoll_do_ctl(epfd, EPOLL_CTL_DEL, ev);
 
     if (http_connect_server(hev) != 0) {
-        log_error("main: connect |%s:%d| failed", hev->ip, hev->port);
-        util_exit();
+        log_error("epoll: connect |%s:%d| failed", hev->ip, hev->port);
+        return -1;
     }
 
     epoll_nonblocking(hev->fd);

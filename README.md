@@ -13,8 +13,17 @@ option
 - -l [error | warn | info | debug], debug level (default error)
 - -c [fd number], specified the number of fd to download ts files (default 20). It doesn't mean fd number is the higher the better.
 
-## note
-- install ffmpeg at first
+## thirdparty
+- libcurl
+- openssl
+- ffmpeg tool
+- ffmpeg libav
+
+## test
+```
+file size ｜  net speed  ｜ download time ｜
+  367MB   ｜  20Mbps     ｜   12.995s     ｜
+```
 
 ## license
 - MIT
