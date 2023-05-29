@@ -258,7 +258,6 @@ static int http_ssl_connect(http_event_t *hev)
     try_timer = 10;
 
     // already got server ip
-    // todo: reuse fd?
     if (strlen(hev->ip) != 0) {
         if (inet_pton(AF_INET, hev->ip, &svaddr.sin_addr) == 1) {
 
@@ -608,6 +607,7 @@ int http_download_file(http_event_t *hev)
         if (stat(path, &st) == 0 && st.st_size == hev->headers_in.content_length) {
             hev->doing = 0;
             buffer->dst = -1;
+            log_debug("http: '%s' already in disk", buffer->file);
             return 0;
         }
 
@@ -832,6 +832,11 @@ void http_free_event(http_event_t *hev)
         }
         close(hev->fd);
         hev->fd = -1;
+    }
+
+    if (hev->handler) {
+        free(hev->handler);
+        hev->handler = NULL;
     }
 
     if (buffer->dst != -1) {
