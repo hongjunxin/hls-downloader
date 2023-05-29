@@ -11,7 +11,6 @@
 #include "epoll.h"
 #include "utility.h"
 
-static void epoll_show_download_progress(ts_list_t *ts_list);
 static int reset_epoll_event(int epfd, struct epoll_event *ev);
 
 int epoll_do_create(int event_cnt)
