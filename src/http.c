@@ -437,28 +437,11 @@ int http_send_request(http_event_t *hev)
     buffer = &hev->buffer;
 
     if (!hev->doing) {
-        /* fix: clear socket received buffer */
-        if (hev->reuse_fd) {
-clear:
-            if (hev->use_ssl) {
-                ret = SSL_read(hev->ssl, buffer->buf, sizeof(buffer->buf));
-            } else {
-                ret = read(hev->fd, buffer->buf, sizeof(buffer->buf));
-            }
-
-            log_debug("http: clear socket received buffer(%ld bytes)", ret);
-
-            if (ret > 0) {
-                goto clear;
-            }
-        }
-
         memset(buffer->buf, '\0', sizeof(buffer->buf));
         snprintf(buffer->buf, sizeof(buffer->buf) - 1, REQUEST_HEAD, hev->uri, hev->host);
         buffer->len = strlen(buffer->buf);
         buffer->cnt = 0;
         buffer->dst = -1;
-
         hev->doing = 1;
 
         log_debug("\n\nhttp: request\n%s", buffer->buf);
@@ -604,7 +587,10 @@ int http_download_file(http_event_t *hev)
             memcpy(path, buffer->file, strlen(buffer->file));
         }
 
+        // todo: analyze ts file completion instead of got file content length
         if (stat(path, &st) == 0 && st.st_size == hev->headers_in.content_length) {
+            // will still read the file content from server if we don't reset the fd
+            hev->reset_fd = 1;
             hev->doing = 0;
             buffer->dst = -1;
             log_debug("http: '%s' already in disk", buffer->file);
@@ -834,7 +820,7 @@ void http_free_event(http_event_t *hev)
         hev->fd = -1;
     }
 
-    if (hev->handler) {
+    if (hev->done && hev->handler) {
         free(hev->handler);
         hev->handler = NULL;
     }

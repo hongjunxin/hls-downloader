@@ -60,7 +60,7 @@ int epoll_do_wait(int epfd, int event_cnt, ts_list_t *ts_list, http_event_t *hev
                 }
 
                 if (hevs[n].buffer.pre_cnt == hevs[n].buffer.cnt) {
-                    log_error("epoll: download time so long, reconnect.");
+                    log_error("epoll: download time for '%s' so long, reconnect.", hevs[n].buffer.file);
                     if (reset_epoll_event(epfd, &events[n]) == -1) {
                         return -1;
                     }
@@ -94,8 +94,16 @@ int epoll_do_wait(int epfd, int event_cnt, ts_list_t *ts_list, http_event_t *hev
                         memcpy(&hev->uri[strlen(hev->uri)], ts, strlen(ts));
                         hev->current = HTTP_SEND_REQUEST;
                         hev->tick = 0;
-                        epoll_do_ctl(epfd, EPOLL_CTL_MOD, &events[n]);
+                        if (hev->reset_fd) {
+                            if (reset_epoll_event(epfd, &events[n]) == -1) {
+                                return -1;
+                            }
+                            hev->reset_fd = 0;
+                        } else {
+                            epoll_do_ctl(epfd, EPOLL_CTL_MOD, &events[n]);
+                        }
                     } else {
+                        hev->done = 1;
                         epoll_do_ctl(epfd, EPOLL_CTL_DEL, &events[n]);
                     }
                 }
@@ -159,7 +167,6 @@ int epoll_do_ctl(int epfd, int op, struct epoll_event *ev)
             }
             break;
         case EPOLL_CTL_DEL:
-            /* todo? */
             break;
         default:
             return -1;

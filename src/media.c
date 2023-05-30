@@ -257,15 +257,23 @@ static int download_ts_files(http_event_t *hevs, ts_list_t *tslist, int fd_nums)
 
 #else
     int epfd;
+    http_event_t *hev;
 
     if ((epfd = epoll_do_create(EPOLL_MAX_EVENTS)) == -1) {
         return -1;
     }
 
-    epoll_nonblocking(hevs[0].fd);
-    hevs[0].reuse_fd = 1;
+    hev = &hevs[0];
+    if (hev->reset_fd) {
+        hev->reset_fd = 0;
+        if (http_connect_server(hev) != 0) {
+            log_error("media: connect |%s:%d| failed", hev->ip, hev->port);
+            return -1;
+        }
+    }
+    epoll_nonblocking(hev->fd);
 
-    if (add_download_ts_event(epfd, &hevs[0], tslist) != 0) {
+    if (add_download_ts_event(epfd, hev, tslist) != 0) {
         return -1;
     }
 
@@ -275,7 +283,6 @@ static int download_ts_files(http_event_t *hevs, ts_list_t *tslist, int fd_nums)
         memcpy(hevs[i].ip, hevs[0].ip, strlen(hevs[0].ip));
         hevs[i].port = hevs[0].port;
         hevs[i].use_ssl = hevs[0].use_ssl;
-        hevs[i].reuse_fd = 1;
 
         if (http_connect_server(&hevs[i]) != 0) {
             log_error("media: connect |%s:%d| failed", hevs[i].ip, hevs[i].port);

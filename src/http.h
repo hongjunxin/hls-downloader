@@ -40,7 +40,7 @@ typedef struct {
 } http_handler_t;
 
 struct http_event_s {
-    http_handler_t *handler;  // free it in http_free_event
+    http_handler_t *handler;
     int current;
     int fd;
     SSL *ssl;
@@ -55,12 +55,12 @@ struct http_event_s {
     int tick;
     unsigned doing:1;
     unsigned use_ssl:1;
-    unsigned reuse_fd:1;
+    unsigned reset_fd:1;
+    unsigned done:1;
 };
 
 int http_parse_url(char *url, http_event_t *hev);
 int http_connect_server(http_event_t *hev);
-int http_get_file(char *host, char* uri, int fd);
 int http_get_file_name(http_event_t *hev);
 int http_send_request(http_event_t *hev);
 int http_read_response(http_event_t *hev);
