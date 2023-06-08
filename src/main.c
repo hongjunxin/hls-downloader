@@ -61,13 +61,13 @@ int main(int argc, char **argv)
         return -1;
     }
 
-    PRINTF_HIDE_CURSOR();
+    // PRINTF_HIDE_CURSOR();
     ret = download_video(config.video_url, config.filename_out, config.fd_nums);
     if (ret == -1) {
         log_error("main: download video from %s failed", config.video_url);
     }
 
-    PRINTF_SHOW_CURSOR();
+    // PRINTF_SHOW_CURSOR();
     return ret;
 }
 

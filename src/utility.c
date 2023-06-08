@@ -20,7 +20,7 @@ void util_show_progress(const char *hint, int done, int total)
     }
     bar[i] = '>';
 
-    printf("%s %%%d [%-51s] [%d/%d]\r", 
+    printf("\e[150D%s %%%d [%-51s] [%d/%d]\n", 
         hint, percent, bar, done, total);
 }
 
