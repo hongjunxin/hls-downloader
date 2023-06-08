@@ -3,9 +3,9 @@ if(NOT TARGET avcodec)
 	find_library(AVCODEC_LIBRARY NAMES avcodec)
 
 	include(FindPackageHandleStandardArgs)
-	find_package_handle_standard_args(LibAvCodec DEFAULT_MSG AVCODEC_LIBRARY AVCODEC_INCLUDE_DIR)
+	find_package_handle_standard_args(Avcodec DEFAULT_MSG AVCODEC_LIBRARY AVCODEC_INCLUDE_DIR)
 
-    if(LibAvCodec_FOUND)
+    if(Avcodec_FOUND)
         add_library(avcodec UNKNOWN IMPORTED)
         set_target_properties(avcodec PROPERTIES
             IMPORTED_LOCATION "${AVCODEC_LIBRARY}"

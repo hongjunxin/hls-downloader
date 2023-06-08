@@ -3,9 +3,9 @@ if(NOT TARGET swresample)
 	find_library(SWRESAMPLE_LIBRARY NAMES swresample)
 
 	include(FindPackageHandleStandardArgs)
-	find_package_handle_standard_args(LibSwresample DEFAULT_MSG SWRESAMPLE_LIBRARY SWRESAMPLE_INCLUDE_DIR)
+	find_package_handle_standard_args(Swresample DEFAULT_MSG SWRESAMPLE_LIBRARY SWRESAMPLE_INCLUDE_DIR)
 
-    if(LibSwresample_FOUND)
+    if(Swresample_FOUND)
         add_library(swresample UNKNOWN IMPORTED)
         set_target_properties(swresample PROPERTIES
             IMPORTED_LOCATION "${SWRESAMPLE_LIBRARY}"

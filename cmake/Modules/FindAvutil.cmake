@@ -3,9 +3,9 @@ if(NOT TARGET avutil)
 	find_library(AVUTIL_LIBRARY NAMES avutil)
 
 	include(FindPackageHandleStandardArgs)
-	find_package_handle_standard_args(LibAvUtil DEFAULT_MSG AVUTIL_LIBRARY AVUTIL_INCLUDE_DIR)
+	find_package_handle_standard_args(Avutil DEFAULT_MSG AVUTIL_LIBRARY AVUTIL_INCLUDE_DIR)
 
-    if(LibAvUtil_FOUND)
+    if(Avutil_FOUND)
         add_library(avutil UNKNOWN IMPORTED)
         set_target_properties(avutil PROPERTIES
             IMPORTED_LOCATION "${AVUTIL_LIBRARY}"
