@@ -71,12 +71,24 @@ int main(int argc, char **argv)
     return ret;
 }
 
+static void usage()
+{
+    printf("Usage:\n"
+           "  -i [m3u8 url]               eg: '-i https://example.com/hls/index.m3u8'\n"
+           "  -o [output path]            eg: '-o output.mp4'\n"   
+           "  -l [error|warn|info|debug]\n" 
+           "  -c [num]                    concurrent fd to download ts file\n"          
+           "  -h                          show this help\n");
+}
+
 static int parse_option(int argc, char **argv, config_t *conf)
 {
     int ch;
     
     if (argc == 1) {
-        return 0;
+        printf("Error: lack cmd parameter\n");
+        usage();
+        return -1;
     }
 
     while ((ch = getopt(argc, argv, "i:o:l:c:h")) != -1) {
@@ -111,11 +123,7 @@ static int parse_option(int argc, char **argv, config_t *conf)
             }
             break;
         case 'h':
-            printf("-i [m3u8 url]               eg: '-i https://example.com/hls/index.m3u8'\n"
-                   "-o [output path]            eg: '-o output.mp4'\n"   
-                   "-l [error|warn|info|debug]\n" 
-                   "-c [num]                    concurrent fd to download ts file\n"          
-                   "-h                          show this help\n");
+            usage();
             exit(0);
         case '?':
             return -1;
