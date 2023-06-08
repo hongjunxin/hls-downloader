@@ -8,8 +8,11 @@
 #include "media.h"
 #include "http.h"
 #include "epoll.h"
-#include "mcurl.h"
 #include "log.h"
+
+#if USE_CURL
+#include "mcurl.h"
+#endif
 
 static int download_hls(char *m3u8_url, char *filename_out, int fd_nums);
 static int get_m3u8_file(http_event_t *hev, ts_list_t *ts_list);
