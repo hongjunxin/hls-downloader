@@ -61,13 +61,11 @@ int main(int argc, char **argv)
         return -1;
     }
 
-    // PRINTF_HIDE_CURSOR();
     ret = download_video(config.video_url, config.filename_out, config.fd_nums);
     if (ret == -1) {
         log_error("main: download video from %s failed", config.video_url);
     }
 
-    // PRINTF_SHOW_CURSOR();
     return ret;
 }
 
@@ -189,10 +187,7 @@ static int check_output_file_format(char *filename_out)
 
 static void signal_handler(int signo)
 {
-    if (signo == SIGINT || signo == SIGQUIT) {
-        PRINTF_SHOW_CURSOR();
-    }
-
+    // do nothing
     exit(-1);
 }
 

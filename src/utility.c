@@ -20,8 +20,9 @@ void util_show_progress(const char *hint, int done, int total)
     }
     bar[i] = '>';
 
-    printf("\e[150D%s %%%d [%-51s] [%d/%d]\n", 
+    printf("%s %%%d [%-51s] [%d/%d]\r", 
         hint, percent, bar, done, total);
+    fflush(stdout);
 }
 
 void *util_calloc(size_t nmemb, size_t size)
