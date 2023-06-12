@@ -9,16 +9,11 @@ find_package(Avcodec REQUIRED)
 find_package(Swresample REQUIRED)
 
 add_executable(libav_example libav_example.c)
-target_link_libraries(libav_example PRIVATE avcodec avformat avutil swresample)
+target_link_libraries(libav_example PRIVATE avformat avcodec avutil swresample m z)
 set_target_properties(libav_example PROPERTIES
     OUTPUT_NAME libav_example)
 
 add_executable(remux_example remux_example.c)
-target_link_libraries(remux_example PRIVATE avcodec avformat avutil swresample)
+target_link_libraries(remux_example PRIVATE avformat avcodec avutil swresample m z)
 set_target_properties(remux_example PROPERTIES
     OUTPUT_NAME remux_example)
-
-add_executable(merge_ts merge_ts.c utility.c)
-target_link_libraries(merge_ts PRIVATE avcodec avformat avutil swresample)
-set_target_properties(merge_ts PROPERTIES
-    OUTPUT_NAME merge_ts)
