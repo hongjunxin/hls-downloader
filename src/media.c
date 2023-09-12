@@ -33,16 +33,30 @@ int download_video(char *video_url, char *filename_out, int fd_nums)
     
     i = strlen(video_url);
     for (; i >= 0; i--) {
+        if (*(video_url + i) == '?') {
+            break;
+        }
+    }
+
+    // no parameters in url
+    if (i < 0) {
+        i = strlen(video_url);
+    }
+
+    for (; i >= 0; i--) {
         if (*(video_url + i) == '.') {
             break;
         }
     }
+
     if (i < 0) {
         log_error("media: %s not a video url", video_url);
         return -1;
     }
     
-    if (strcmp(video_url + i, ".m3u8") == 0) {
+    // http://host/path/xxx.m3u8?a=b
+
+    if (strncmp(video_url + i, ".m3u8", strlen(".m3u8")) == 0) {
         return download_hls(video_url, filename_out, fd_nums);
     } else {
         log_error("media: just support download m3u8 so far");

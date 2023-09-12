@@ -47,7 +47,7 @@ struct http_event_s {
     SSL_CTX *ssl_ctx;
     unsigned short port;
     char host[64];
-    char uri[128];
+    char uri[512];
     char ip[16];
     http_buffer_t buffer;
     http_headers_in_t headers_in;
