@@ -10,10 +10,6 @@
 #include "epoll.h"
 #include "log.h"
 
-#if USE_CURL
-#include "mcurl.h"
-#endif
-
 static int download_hls(char *m3u8_url, char *filename_out, int fd_nums);
 static int get_m3u8_file(http_event_t *hev, ts_list_t *ts_list);
 static int parse_m3u8_file(http_event_t *hev, ts_list_t *ts_list);
@@ -180,63 +176,6 @@ static int get_m3u8_file(http_event_t *hev, ts_list_t *ts_list)
         return -1;
     }
 
-#if USE_CURL
-    CURL *curl;
-    CURLcode ret;
-    http_buffer_t *buffer = &hev->buffer;
-    char path[256] = {'\0'};
-
-    curl = curl_easy_init();
-    if (curl == NULL) {
-        log_error("media: curl_easy_init() failed");
-        return -1;
-    }
-
-    if (http_get_file_name(hev) != 0) {
-        log_error("media: get file name failed, uri='%s'", hev->uri);
-        goto err;
-    }
-
-    if (strlen(buffer->dir) != 0) {
-        memcpy(path, buffer->dir, strlen(buffer->dir));
-        memcpy(&path[strlen(path)], "/", 1);
-        memcpy(&path[strlen(path)], buffer->file, strlen(buffer->file));
-    } else {
-        memcpy(path, buffer->file, strlen(buffer->file));
-    }
-
-    buffer->dst = open(path, O_CREAT|O_WRONLY|O_TRUNC, 0644);
-    if (buffer->dst == -1) {
-        log_error_errno("http: open '%s' failed", path);
-        goto err;
-    }
-
-    curl_easy_setopt(curl, CURLOPT_TCP_KEEPALIVE, 1L);
-    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_handler);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buffer->dst);
-    curl_easy_setopt(curl, CURLOPT_URL, ts_list->m3u8_url);
-
-    ret = curl_easy_perform(curl);
-    if (ret != CURLE_OK) {
-        log_error("media: curl_easy_perform() failed, error='%s'", curl_easy_strerror(ret));
-        goto err;
-    }
-
-    if (buffer->dst != -1) {
-        close(buffer->dst);
-    }
-    curl_easy_cleanup(curl);
-    return 0;
-
-err:
-    if (buffer->dst != -1) {
-        close(buffer->dst);
-    }
-    curl_easy_cleanup(curl);
-    return -1;
-
-#else
     if (http_connect_server(hev) != 0) {
         return -1;
     }
@@ -248,7 +187,6 @@ err:
     }
 
     return 0;
-#endif
 }
 
 static int download_ts_files(http_event_t *hevs, ts_list_t *tslist, int fd_nums)
@@ -265,14 +203,6 @@ static int download_ts_files(http_event_t *hevs, ts_list_t *tslist, int fd_nums)
     mark = strstr(hevs[0].uri, hevs[0].buffer.file);
     memcpy(tslist->base_uri, hevs[0].uri, mark - hevs[0].uri - 1);
 
-#if USE_CURL
-    for (i = 1; i < fd_nums; ++i) {
-        memcpy(hevs[i].buffer.dir, hevs[0].buffer.dir, strlen(hevs[0].buffer.dir));
-    }
-
-    return curl_download_ts_files(hevs, fd_nums, tslist);
-
-#else
     int epfd;
     http_event_t *hev;
 
@@ -316,8 +246,6 @@ static int download_ts_files(http_event_t *hevs, ts_list_t *tslist, int fd_nums)
     if (epoll_do_wait(epfd, fd_nums, tslist, hevs) == -1) {
         return -1;
     }
-
-#endif
 
     return 0;
 }
