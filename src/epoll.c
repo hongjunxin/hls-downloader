@@ -92,6 +92,7 @@ int epoll_do_wait(int epfd, int event_cnt, ts_list_t *ts_list, http_event_t *hev
                         memcpy(hev->uri, ts_list->base_uri, strlen(ts_list->base_uri));
                         memcpy(&hev->uri[strlen(hev->uri)], "/", 1);
                         memcpy(&hev->uri[strlen(hev->uri)], ts, strlen(ts));
+                        // todo: add parameters to hev->uri
                         hev->current = HTTP_SEND_REQUEST;
                         hev->tick = 0;
                         if (hev->reset_fd) {

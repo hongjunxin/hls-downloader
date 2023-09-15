@@ -31,13 +31,12 @@
 
 // todo: Accept-Encoding: identity
 #define REQUEST_HEAD \
-        "GET %s HTTP/1.1 \r\n"                      \
-        "User-Agent: Wget/1.20.3 (linux-gnu) \r\n"  \
-        "Accept: */* \r\n"                          \
-        "Accept-Encoding: identity \r\n"            \
-        "Host: %s \r\n"                             \
-        "Connection: Keep-Alive \r\n"               \
-        "\r\n"                                      \
+        "GET %s HTTP/1.1\r\n"                      \
+        "User-Agent: Wget/1.20.3 (linux-gnu)\r\n"  \
+        "Accept: */*\r\n"                          \
+        "Host: %s\r\n"                             \
+        "Connection: Keep-Alive\r\n"               \
+        "\r\n"                                     \
 
 extern int errno;
 extern int h_errno;
@@ -444,7 +443,7 @@ int http_send_request(http_event_t *hev)
         buffer->dst = -1;
         hev->doing = 1;
 
-        log_debug("\n\nhttp: request\n%s", buffer->buf);
+        log_debug("\n\nhttp: request (len=%ld)\n%s", strlen(buffer->buf), buffer->buf);
     }
 
     while (buffer->cnt < buffer->len) {
@@ -766,8 +765,55 @@ int http_get_file_name(http_event_t *hev)
 int http_parse_url(char *url, http_event_t *hev)
 {
     char p[16] = {'\0'};
-    char *p1, *p2;
+    char *p1, *p2, *proxy;
     unsigned short port;
+
+    // todo: ignore https_proxy so far
+    if ((proxy = getenv("http_proxy")) != NULL) {
+        hev->use_ssl = 0;
+
+        p1 = proxy + strlen("http://");
+        p2 = strchr(p1, ':');
+        if (p2) {
+            memcpy(hev->ip, p1, p2 - p1);
+            p1 = p2 + 1;
+            p2 = proxy + strlen(proxy);
+            memcpy(p, p1, p2 - p1);
+            hev->port = atoi(p);
+        } else {
+            p2 = proxy + strlen(proxy);
+            memcpy(hev->ip, p1, p2 - p1);
+            hev->port = 80;
+        }
+
+        if (strstr(url, "https://") != NULL) {
+            p2 = url + strlen("https://");
+        } else if (strstr(url, "http://") != NULL) {
+            p2 = url + strlen("http://");
+        } else {
+            log_error("-i '%s' without http(s)", url);
+            return -1;
+        }
+
+        p1 = p2;
+        while (*p2 != '/' && *p2 != '\0') {
+            if (*p2 == ':') {
+                memcpy(hev->host, p1, p2 - p1);
+                p1 = p2 + 1;
+            }
+            ++p2;
+        }
+
+        if (strlen(hev->host) == 0) {
+            memcpy(hev->host, p1, p2 - p1);
+        }
+
+        log_info("http: use proxy %s:%d, target host '%s'", hev->ip, hev->port, hev->host);
+
+        // path should be in absolution pattern such as http://host/path
+        snprintf(hev->uri, sizeof(hev->uri), "%s", url);
+        return 0;
+    }
 
     if (strstr(url, "https://") != NULL) {
         p2 = url + strlen("https://");
