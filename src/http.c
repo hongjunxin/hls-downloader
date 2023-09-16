@@ -29,7 +29,6 @@
 #include "http.h"
 #include "utility.h"
 
-// todo: Accept-Encoding: identity
 #define REQUEST_HEAD \
         "GET %s HTTP/1.1\r\n"                      \
         "User-Agent: Wget/1.20.3 (linux-gnu)\r\n"  \
@@ -42,7 +41,7 @@ extern int errno;
 extern int h_errno;
 
 static int http_save_file(http_event_t *hev);
-static int http_read_headers(http_event_t *hev);
+static int http_get_resp_headers(http_event_t *hev);
 static int http_ssl_connect(http_event_t *hev);
 static int check_server_certificate(X509 *cert, char *host);
 static void error_string(unsigned long err);
@@ -495,7 +494,7 @@ int http_read_response(http_event_t *hev)
         hev->doing = 1;
     }
 
-    ret = http_read_headers(hev);
+    ret = http_get_resp_headers(hev);
     if (ret == EAGAIN) {
         return EAGAIN;
     } else if (ret == -1) {
@@ -505,6 +504,11 @@ int http_read_response(http_event_t *hev)
     buffer->len = buffer->cnt;
     buffer->cnt = 0;
 
+    for (i = 0; i < HTTP_RESP_HEADERS_MAX && hev->resp_headers[i]; i++) {
+        free(hev->resp_headers[i]);
+        hev->resp_headers[i] = NULL;
+    }
+
     while (buffer->cnt < buffer->len) {
         for (i = 0; buffer->cnt < buffer->len && buffer->buf[buffer->cnt] != '\r';
                 ++i, ++buffer->cnt) {
@@ -513,8 +517,6 @@ int http_read_response(http_event_t *hev)
 
         line[i] = '\0';
         buffer->cnt += strlen("\r\n");
-
-        log_debug("http: header '%s'", line);
 
         if (strlen(line) == 0) {
             end = 1;
@@ -527,23 +529,50 @@ int http_read_response(http_event_t *hev)
                 log_error("%s", line);
                 goto err;
             }
-        } else if ((mark = util_str_begin_with(line, "Content-Length: ", strlen("Content-Length: ")))) {
-            mark += strlen("Content-Length: ");
-            p = mark;
-            while (*mark != '\r') {
-                ++mark;
+        } else {
+            if (!strstr(line, ": ")) {
+                log_error("http: header format error");
+                goto err;
             }
-            snprintf(buf, mark - p + 1, "%s", p);
-            hev->headers_in.content_length = atoi(buf);
-        } else if (!strstr(line, ": ")) {
-            log_error("http: header format error");
-            return -1;
+            header_t *h = (header_t*) malloc(sizeof(header_t));
+            if (!h) {
+                log_error("malloc header_t error");
+                goto err;
+            }
+            memset(h, '\0', sizeof(header_t));
+
+            char *p1, *p2;
+            p1 = line;
+            p2 = strchr(p1, ':');
+            memcpy(h->key, p1, p2 - p1);
+
+            p1 = p2 + 2; // skip ": "
+            p2 = line + strlen(line);
+            memcpy(h->value, p1, p2 - p1);
+
+            if (http_insert_header(hev->resp_headers, h) != 0) {
+                goto err;
+            }
+
+            if (strcmp(h->key, "Content-Length") == 0) {
+                hev->headers_in.content_length = atoi(h->value);
+            }
+
+            if (strcmp(h->key, "Transfer-Encoding") == 0 &&
+                    strcmp(h->value, "chunked") == 0) {
+                hev->headers_in.chuncked = 1;        
+            }
         }
     }
 
     if (end != 1) {
         log_error("http: parse header failed, not found the end of headers.");
         goto err;
+    }
+
+    if (log_level == debug) {
+        log_debug("http: response header");
+        print_header(hev->resp_headers);
     }
 
     hev->doing = 0;
@@ -554,6 +583,7 @@ err:
     return -1;    
 }
 
+// todo: add download chuncked
 int http_download_file(http_event_t *hev)
 {
     ssize_t ret;
@@ -640,7 +670,7 @@ err:
     return -1;
 }
 
-static int http_read_headers(http_event_t *hev)
+static int http_get_resp_headers(http_event_t *hev)
 {
     ssize_t ret;
     http_buffer_t *buffer = &hev->buffer;
@@ -662,14 +692,20 @@ static int http_read_headers(http_event_t *hev)
         if (ret == -1) {
             if (errno == EAGAIN) {
                 return EAGAIN;
-            } 
+            }
+            log_info("http: read response error, %s", strerror(errno));
             goto err;
         }
         
         if (ret == 0) {
             if (strstr(buffer->buf, "\r\n\r\n")) {
                 return 0;
-            } 
+            }
+            if (buffer->cnt == 0) {
+                log_info("http: empty response");
+            } else {
+                log_info("http: missing end mark in respone headers");
+            }
             goto err;
         }
 
@@ -688,7 +724,7 @@ err:
 static int http_save_file(http_event_t *hev)
 {
     ssize_t ret = 0;
-    char buf[1024];
+    char buf[256 * 1024];
 
     http_buffer_t *buffer = &hev->buffer;
 
@@ -871,6 +907,11 @@ void http_free_event(http_event_t *hev)
         hev->handler = NULL;
     }
 
+    for (int i = 0; i < HTTP_RESP_HEADERS_MAX && hev->resp_headers[i]; i++) {
+        free(hev->resp_headers[i]);
+        hev->resp_headers[i] = NULL;
+    }
+
     if (buffer->dst != -1) {
         close(buffer->dst);
         buffer->dst = -1;
@@ -881,5 +922,44 @@ void http_free_event(http_event_t *hev)
         buffer->file = NULL;
         buffer->filename_len = 0;
     }
+}
 
+int http_insert_header(header_t **hs, header_t *h)
+{
+    int i;
+    for (i = 0; i < HTTP_RESP_HEADERS_MAX; i++) {
+        if (!hs[i]) {
+            break;
+        }
+    }
+
+    if (i == HTTP_RESP_HEADERS_MAX) {
+        log_error("http: response headers line more than %d", HTTP_READ_RESPONSE);
+        return -1;
+    }
+
+    hs[i] = h;
+
+    return 0;
+}
+
+char *http_find_header(header_t **hs, const char *key)
+{
+    char *value = NULL;
+
+    for (int i = 0 ; i < HTTP_RESP_HEADERS_MAX && hs[i]; i++) {
+        if (strcmp(key, hs[i]->key) == 0) {
+            value = hs[i]->value;
+            break;
+        }
+    }
+
+    return value;
+}
+
+void print_header(header_t **hs)
+{
+    for (int i = 0; i < HTTP_RESP_HEADERS_MAX && hs[i]; i++) {
+        printf("%s: %s\n", hs[i]->key, hs[i]->value);
+    }
 }

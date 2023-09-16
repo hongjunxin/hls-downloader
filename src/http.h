@@ -8,6 +8,7 @@
 #include <openssl/ssl.h>
 
 #define HTTP_BUFFER_SIZE 4096*2
+#define HTTP_RESP_HEADERS_MAX  128
 
 #define HTTP_SEND_REQUEST   0
 #define HTTP_READ_RESPONSE  1
@@ -21,7 +22,13 @@ typedef int (*http_event_handler_pt)(http_event_t *ev);
 typedef struct {
     int status;
     ssize_t content_length;
+    unsigned chuncked:1;
 } http_headers_in_t;
+
+typedef struct {
+    char key[64];
+    char value[256];
+} header_t;
 
 typedef struct {
     ssize_t len;
@@ -51,6 +58,7 @@ struct http_event_s {
     char ip[16];
     http_buffer_t buffer;
     http_headers_in_t headers_in;
+    header_t *resp_headers[HTTP_RESP_HEADERS_MAX];
     int again_timer;
     int tick;
     unsigned doing:1;
@@ -58,6 +66,10 @@ struct http_event_s {
     unsigned reset_fd:1;
     unsigned done:1;
 };
+
+int http_insert_header(header_t **hs, header_t *h);
+char *http_find_header(header_t **hs, const char *key);
+void print_header(header_t **hs);
 
 int http_parse_url(char *url, http_event_t *hev);
 int http_connect_server(http_event_t *hev);
