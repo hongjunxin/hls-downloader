@@ -631,19 +631,23 @@ int http_download_file(http_event_t *hev)
             goto err;
         }
 
+        // todo: move to http_save_file
         if (buffer->cnt < buffer->len) {
+            int cnt = buffer->cnt;
             while (buffer->cnt < buffer->len) {
                 ret = write(buffer->dst, &buffer->buf[buffer->cnt], buffer->len - buffer->cnt);
                 if (ret == -1) {
-                    log_error("http: write to '%s' failed", path);
+                    log_error("http: write to '%s' failed, %s", path, strerror(errno));
                     goto err;
                 }
                 buffer->cnt += ret;
             }
-        }    
+            buffer->len = hev->headers_in.content_length - (buffer->len - cnt);
+        } else {
+            buffer->len = hev->headers_in.content_length;
+        }
 
         buffer->cnt = 0;
-        buffer->len = hev->headers_in.content_length - ret;
     }
 
     ret = http_save_file(hev);
@@ -651,11 +655,16 @@ int http_download_file(http_event_t *hev)
     if (ret == 0) {
         log_debug("http: save '%s' done, fd=%d", buffer->file, hev->fd);
 
+        char *closed = http_find_header(hev->resp_headers, "Connection");
+        if (closed && strcmp(closed, "close") == 0) {
+            hev->reset_fd = 1;
+        }
+
         hev->doing = 0;
         close(buffer->dst);
         buffer->dst = -1;
         return 0;        
-    } else if (ret == EAGAIN) {
+    } else if (ret == EAGAIN) { 
         return EAGAIN;
     }
 
@@ -738,6 +747,9 @@ static int http_save_file(http_event_t *hev)
         }
 
         if (ret == -1) {
+            if (errno != EAGAIN) {
+                log_error("http: received body of '%s' error, %s", hev->uri, strerror(errno));
+            }
             return errno == EAGAIN ? EAGAIN : -1;
         } else if (ret == 0) {
             goto done;
@@ -751,7 +763,12 @@ static int http_save_file(http_event_t *hev)
     }
 
 done:
-    return buffer->cnt == buffer->len ? 0 : -1;
+    if (buffer->cnt != buffer->len) {
+        log_error("http: body received in part(%ld|%ld|content-length %ld) of '%s'",
+                  buffer->cnt, buffer->len, hev->headers_in.content_length, hev->uri);
+        return -1;
+    }
+    return 0;
 }
 
 int http_get_file_name(http_event_t *hev)
