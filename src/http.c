@@ -442,7 +442,8 @@ int http_send_request(http_event_t *hev)
         buffer->dst = -1;
         hev->doing = 1;
 
-        log_debug("\n\nhttp: request (len=%ld)\n%s", strlen(buffer->buf), buffer->buf);
+        log_debug("\n\nhttp: request (len=%ld), fd=%d\n%s",
+            strlen(buffer->buf), hev->fd, buffer->buf);
     }
 
     while (buffer->cnt < buffer->len) {
@@ -571,8 +572,8 @@ int http_read_response(http_event_t *hev)
     }
 
     if (log_level == debug) {
-        log_debug("http: response header");
-        print_header(hev->resp_headers);
+        log_debug("http: response header, fd=%d", hev->fd);
+        http_print_header(hev->resp_headers);
     }
 
     hev->doing = 0;
@@ -589,56 +590,38 @@ int http_download_file(http_event_t *hev)
     ssize_t ret;
     struct stat st;
     http_buffer_t *buffer = &hev->buffer;
-    char path[256] = {'\0'};
-
+    
     if (!hev->doing) {
         hev->doing = 1;
         buffer->pre_cnt = 0;
 
-        if (hev->headers_in.content_length == 0) {
-            log_error("http: Content-Length is 0");
-            return -1;
-        }
-
-        if (http_get_file_name(hev) != 0) {
-            log_error("http: get file name failed, uri='%s'", hev->uri);
+        if (hev->headers_in.content_length == 0 && hev->headers_in.chuncked == 0) {
+            log_error("http: Content-Length is 0, and not chuncked");
             return -1;
         }
 
         log_debug("http: saving to '%s', content length %ld bytes, fd=%d", 
-            buffer->file, hev->headers_in.content_length, hev->fd);
+            buffer->dst_file, hev->headers_in.content_length, hev->fd);
 
-        if (strlen(buffer->dir) != 0) {
-            memcpy(path, buffer->dir, strlen(buffer->dir));
-            memcpy(&path[strlen(path)], "/", 1);
-            memcpy(&path[strlen(path)], buffer->file, strlen(buffer->file));
+        char tmppath[522] = {'\0'};
+        if (strlen(buffer->dir) > 0) {
+            snprintf(tmppath, sizeof(tmppath) - 1, "%s/%s.tmp", buffer->dir, buffer->dst_file);
         } else {
-            memcpy(path, buffer->file, strlen(buffer->file));
+            snprintf(tmppath, sizeof(tmppath) - 1, "%s.tmp", buffer->dst_file);
         }
 
-        // todo: analyze ts file completion instead of got file content length
-        if (stat(path, &st) == 0 && st.st_size == hev->headers_in.content_length) {
-            // will still read the file content from server if we don't reset the fd
-            hev->reset_fd = 1;
-            hev->doing = 0;
-            buffer->dst = -1;
-            log_debug("http: '%s' already in disk", buffer->file);
-            return 0;
-        }
-
-        if ((buffer->dst = open(path, O_CREAT|O_WRONLY|O_TRUNC, 0644)) == -1) {
-            log_error("http: open '%s' failed", path);
+        if ((buffer->dst = open(tmppath, O_CREAT|O_WRONLY|O_TRUNC, 0644)) == -1) {
+            log_error("http: open '%s' failed", tmppath);
             goto err;
         }
 
-        // todo: move to http_save_file
         if (buffer->cnt < buffer->len) {
             int cnt = buffer->cnt;
             while (buffer->cnt < buffer->len) {
                 ret = write(buffer->dst, &buffer->buf[buffer->cnt], buffer->len - buffer->cnt);
                 if (ret == -1) {
-                    log_error("http: write to '%s' failed, %s", path, strerror(errno));
-                    goto err;
+                    log_error("http: write to '%s' failed, %s", buffer->dst_file, strerror(errno));
+                    return -1;
                 }
                 buffer->cnt += ret;
             }
@@ -653,7 +636,23 @@ int http_download_file(http_event_t *hev)
     ret = http_save_file(hev);
 
     if (ret == 0) {
-        log_debug("http: save '%s' done, fd=%d", buffer->file, hev->fd);
+        char dstpath[522] = {'\0'};
+        char tmppath[522] = {'\0'};
+
+        if (strlen(buffer->dir) > 0) {
+            snprintf(tmppath, sizeof(tmppath) - 1, "%s/%s.tmp", buffer->dir, buffer->dst_file);
+            snprintf(dstpath, sizeof(dstpath) - 1, "%s/%s", buffer->dir, buffer->dst_file);
+        } else {
+            snprintf(tmppath, sizeof(tmppath) - 1, "%s.tmp", buffer->dst_file);
+            snprintf(dstpath, sizeof(dstpath) - 1, "%s", buffer->dst_file);
+        }
+
+        if (rename(tmppath, dstpath) != 0) {
+            log_error("rename '%s' to '%s' failed, fd=%d, %s",
+                      tmppath, dstpath, hev->fd, strerror(errno));
+        } else {
+            log_debug("http: save '%s' done, fd=%d", dstpath, hev->fd);
+        }
 
         char *closed = http_find_header(hev->resp_headers, "Connection");
         if (closed && strcmp(closed, "close") == 0) {
@@ -669,7 +668,7 @@ int http_download_file(http_event_t *hev)
     }
 
 err:
-    log_error("http: download '%s' failed", buffer->file);
+    log_error("http: download '%s' failed", buffer->dst_file);
 
     hev->doing = 0;
     if (buffer->dst != -1) {
@@ -757,7 +756,7 @@ static int http_save_file(http_event_t *hev)
         buffer->cnt += ret;
 
         if (ret != write(buffer->dst, buf, ret)) {
-            log_error( "http: write '%s' failed", buffer->file);
+            log_error( "http: write '%s' failed", buffer->dst_file);
             return -1;
         }
     }
@@ -771,51 +770,7 @@ done:
     return 0;
 }
 
-int http_get_file_name(http_event_t *hev)
-{
-    char *p, *mark;
-    http_buffer_t *buffer;
-    int name_len;
-
-    if (strlen(hev->uri) == 0) {
-        return -1;
-    }
-
-    buffer = &hev->buffer;
-
-    p = hev->uri + strlen(hev->uri);
-    mark = p;
-
-    while (p != hev->uri) {
-        if (*p == '?') {
-            mark = p;
-        } else if (*p == '/') {
-            break;
-        }
-        --p;
-    }
-
-    ++p;
-
-    name_len = mark - p + 1;
-    if (name_len > buffer->filename_len) {
-        if (buffer->file) {
-            free(buffer->file);
-        }
-
-        buffer->file = util_calloc(sizeof(char), name_len);
-        if (!buffer->file) {
-            return -1;
-        }
-        buffer->filename_len = name_len;
-    }
-
-    snprintf(buffer->file, name_len, "%s", p);
-
-    return 0;
-}
-
-int http_parse_url(char *url, http_event_t *hev)
+int http_parse_video_url(char *url, http_event_t *hev)
 {
     char p[16] = {'\0'};
     char *p1, *p2, *proxy;
@@ -863,40 +818,57 @@ int http_parse_url(char *url, http_event_t *hev)
 
         log_info("http: use proxy %s:%d, target host '%s'", hev->ip, hev->port, hev->host);
 
-        // path should be in absolution pattern such as http://host/path
+        // hev->uri is url if use proxy, such as http://host/path?k1=v1
         snprintf(hev->uri, sizeof(hev->uri), "%s", url);
-        return 0;
-    }
-
-    if (strstr(url, "https://") != NULL) {
-        p2 = url + strlen("https://");
-        hev->use_ssl = 1;
-    } else if (strstr(url, "http://") != NULL) {
-        p2 = url + strlen("http://");
-        hev->use_ssl = 0;
     } else {
-        log_error("-i '%s' without http(s)", url);
-        return -1;
-    }
-
-    p1 = p2;
-    while (*p2 != '/' && *p2 != '\0') {
-        if (*p2 == ':') {
-            memcpy(hev->host, p1, p2 - p1);
-            p1 = p2 + 1;
+        if (strstr(url, "https://") != NULL) {
+            p2 = url + strlen("https://");
+            hev->use_ssl = 1;
+        } else if (strstr(url, "http://") != NULL) {
+            p2 = url + strlen("http://");
+            hev->use_ssl = 0;
+        } else {
+            log_error("-i '%s' without http(s)", url);
+            return -1;
         }
-        ++p2;
+
+        p1 = p2;
+        while (*p2 != '/' && *p2 != '\0') {
+            if (*p2 == ':') {
+                memcpy(hev->host, p1, p2 - p1);
+                p1 = p2 + 1;
+            }
+            ++p2;
+        }
+
+        if (strlen(hev->host) == 0) {
+            memcpy(hev->host, p1, p2 - p1);
+            hev->port = (hev->use_ssl == 1) ? 443 : 80;
+        } else {
+            memcpy(p, p1, p2 - p1);
+            hev->port = atoi(p);
+        }
+
+        // hev->uri include path and parameter
+        snprintf(hev->uri, sizeof(hev->uri), "%s", p2);
     }
 
-    if (strlen(hev->host) == 0) {
-        memcpy(hev->host, p1, p2 - p1);
-        hev->port = (hev->use_ssl == 1) ? 443 : 80;
+    p1 = strchr(url, '?');
+    if (p1) {
+        ++p1;
+        p2 = url + strlen(url);
+        memcpy(hev->parameter, p1, p2 - p1);
+
+        p2 = p1 - 1;
+        p1 = strrchr(url, '/');
+        ++p1;
+        memcpy(hev->buffer.dst_file, p1, p2 - p1);
     } else {
-        memcpy(p, p1, p2 - p1);
-        hev->port = atoi(p);
+        p1 = strrchr(url, '/');
+        ++p1;
+        p2 = url + strlen(url);
+        memcpy(hev->buffer.dst_file, p1, p2 - p1);
     }
-
-    snprintf(hev->uri, sizeof(hev->uri), "%s", p2);
 
     return 0;
 }
@@ -933,12 +905,6 @@ void http_free_event(http_event_t *hev)
         close(buffer->dst);
         buffer->dst = -1;
     }
-
-    if (buffer->file) {
-        free(buffer->file);
-        buffer->file = NULL;
-        buffer->filename_len = 0;
-    }
 }
 
 int http_insert_header(header_t **hs, header_t *h)
@@ -974,9 +940,44 @@ char *http_find_header(header_t **hs, const char *key)
     return value;
 }
 
-void print_header(header_t **hs)
+void http_print_header(header_t **hs)
 {
     for (int i = 0; i < HTTP_RESP_HEADERS_MAX && hs[i]; i++) {
         printf("%s: %s\n", hs[i]->key, hs[i]->value);
     }
+}
+
+// return 0 if ts_list empty, or 1 on update done
+int http_update_next_ts_uri(http_event_t *hev, ts_list_t *ts_list)
+{
+    char *ts;
+    char file[266] = {'\0'};
+
+    for (;;) {
+        ts = ts_list->get_ts_name(ts_list);
+        if (!ts) {
+            return 0;
+        }
+
+        snprintf(file, sizeof(file) - 1, "%s/%s", hev->buffer.dir, ts);
+
+        if (access(file, F_OK) == 0) {
+            log_debug("'%s' already in disk", ts);
+            util_show_progress("download ts files...", ++ts_list->success, ts_list->ts_cnt);
+            memset(file, '\0', sizeof(file));
+            continue;
+        } else {
+            memset(hev->buffer.dst_file, '\0', sizeof(hev->buffer.dst_file));
+            memcpy(hev->buffer.dst_file, ts, strlen(ts));
+            memset(hev->uri, '\0', sizeof(hev->uri));
+            if (strlen(hev->parameter) > 0) {
+                snprintf(hev->uri, sizeof(hev->uri) - 1, "%s/%s?%s", ts_list->base_uri, ts, hev->parameter);
+            } else {
+                snprintf(hev->uri, sizeof(hev->uri) - 1, "%s/%s", ts_list->base_uri, ts);
+            }
+            return 1;
+        }
+    }
+
+    return 0;
 }

@@ -6,6 +6,7 @@
 #define _HTTP_H_
 
 #include <openssl/ssl.h>
+#include "utility.h"
 
 #define HTTP_BUFFER_SIZE 4096*2
 #define HTTP_RESP_HEADERS_MAX  128
@@ -34,10 +35,9 @@ typedef struct {
     ssize_t len;
     ssize_t cnt;
     ssize_t pre_cnt;
-    int dst;        /* dst file fd */
-    char *file;     /* dst file name */
-    int filename_len;
-    char dir[256];  /* dst file dir */
+    int dst;             /* dst file fd */
+    char dst_file[256];  /* dst file name */
+    char dir[256];       /* dst file dir exclude m3u8 */
     char buf[HTTP_BUFFER_SIZE];
 } http_buffer_t;
 
@@ -54,7 +54,8 @@ struct http_event_s {
     SSL_CTX *ssl_ctx;
     unsigned short port;
     char host[64];
-    char uri[512];
+    char uri[640];
+    char parameter[256];  // such as k1=v1&k2=v2
     char ip[16];
     http_buffer_t buffer;
     http_headers_in_t headers_in;
@@ -67,16 +68,27 @@ struct http_event_s {
     unsigned done:1;
 };
 
+typedef struct ts_list {
+    char *m3u8_url;
+    char base_uri[256];  // bug: missing handle parameter
+    int ts_cnt;
+    int taken_cnt;
+    int failure;
+    int success;
+    list_t *ts;
+    char* (*get_ts_name)(struct ts_list *self);
+} ts_list_t;
+
 int http_insert_header(header_t **hs, header_t *h);
 char *http_find_header(header_t **hs, const char *key);
-void print_header(header_t **hs);
+void http_print_header(header_t **hs);
 
-int http_parse_url(char *url, http_event_t *hev);
+int http_parse_video_url(char *url, http_event_t *hev);
 int http_connect_server(http_event_t *hev);
-int http_get_file_name(http_event_t *hev);
 int http_send_request(http_event_t *hev);
 int http_read_response(http_event_t *hev);
 int http_download_file(http_event_t *hev);
 void http_free_event(http_event_t *hev);
+int http_update_next_ts_uri(http_event_t *hev, ts_list_t *ts_list);
 
 #endif

@@ -143,9 +143,9 @@ static CURL* curl_init_download_ts_handle(http_event_t *hev, ts_list_t *tslist, 
     if (strlen(buffer->dir) != 0) {
         memcpy(path, buffer->dir, strlen(buffer->dir));
         memcpy(&path[strlen(path)], "/", 1);
-        memcpy(&path[strlen(path)], buffer->file, strlen(buffer->file));
+        memcpy(&path[strlen(path)], buffer->dst_file, strlen(buffer->dst_file));
     } else {
-        memcpy(path, buffer->file, strlen(buffer->file));
+        memcpy(path, buffer->dst_file, strlen(buffer->dst_file));
     }
 
     if ((buffer->dst = open(path, O_CREAT|O_WRONLY|O_TRUNC, 0644)) == -1) {

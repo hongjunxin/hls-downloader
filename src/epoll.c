@@ -60,7 +60,7 @@ int epoll_do_wait(int epfd, int event_cnt, ts_list_t *ts_list, http_event_t *hev
                 }
 
                 if (hevs[n].buffer.pre_cnt == hevs[n].buffer.cnt) {
-                    log_error("epoll: download time for '%s' so long, reconnect.", hevs[n].buffer.file);
+                    log_error("epoll: download time for '%s' so long, reconnect.", hevs[n].buffer.dst_file);
                     if (reset_epoll_event(epfd, &events[n]) == -1) {
                         return -1;
                     }
@@ -86,13 +86,9 @@ int epoll_do_wait(int epfd, int event_cnt, ts_list_t *ts_list, http_event_t *hev
                     ts_list->success++;
                     util_show_progress("download ts files...", ts_list->success, ts_list->ts_cnt);
 
-                    ts = ts_list->get_ts_name(ts_list);
-                    if (ts) {
-                        memset(hev->uri, '\0', sizeof(hev->uri));
-                        memcpy(hev->uri, ts_list->base_uri, strlen(ts_list->base_uri));
-                        memcpy(&hev->uri[strlen(hev->uri)], "/", 1);
-                        memcpy(&hev->uri[strlen(hev->uri)], ts, strlen(ts));
-                        // todo: add parameters to hev->uri
+                    ret = http_update_next_ts_uri(hev, ts_list);
+
+                    if (ret == 1) {
                         hev->current = HTTP_SEND_REQUEST;
                         hev->tick = 0;
                         if (hev->reset_fd) {

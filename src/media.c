@@ -19,7 +19,7 @@ static char* get_ts_file_name(ts_list_t *ts_list);
 static void merge_ts_files_task(char *desc_file, char *out_file); // use ffmpeg tool
 static int merge_ts_files(const char *ts_list, int ts_nums, const char *out_filename); // use ffmpeg libav
 
-static char *m3u8_file = NULL;
+static char m3u8_file[256] = {'\0'};
 
 #define FILE_TS_LIST "ts.list"
 
@@ -152,6 +152,8 @@ static int download_hls(char *m3u8_url, char *filename_out, int fd_nums)
     snprintf(oldpath, len, "%s/%s", hevs[0].buffer.dir, filename_out);
     rename(oldpath, filename_out);
     remove(m3u8_file);
+    memcpy(&m3u8_file[strlen(m3u8_file)], ".done", 5);
+    remove(m3u8_file);
 
     memset(cmd, '\0', sizeof(cmd));
     memcpy(cmd, "rm -rf ", 7);
@@ -172,12 +174,17 @@ error:
 
 static int get_m3u8_file(http_event_t *hev, ts_list_t *ts_list)
 {
-    if (http_parse_url(ts_list->m3u8_url, hev) != 0) {
+    if (http_parse_video_url(ts_list->m3u8_url, hev) != 0) {
         return -1;
     }
 
     if (http_connect_server(hev) != 0) {
         return -1;
+    }
+
+    if (access(hev->buffer.dst_file, F_OK) == 0) {
+        log_debug("'%s' already in disk", hev->buffer.dst_file);
+        return 0;
     }
 
     if (http_send_request(hev) != 0 ||
@@ -194,13 +201,9 @@ static int download_ts_files(http_event_t *hevs, ts_list_t *tslist, int fd_nums)
     char *mark;
     int i, ret;
 
-    m3u8_file = util_calloc(sizeof(char), hevs[0].buffer.filename_len);
-    if (!m3u8_file) {
-        return -1;
-    }
-    memcpy(m3u8_file, hevs[0].buffer.file, hevs[0].buffer.filename_len);
+    memcpy(m3u8_file, hevs[0].buffer.dst_file, strlen(hevs[0].buffer.dst_file));
 
-    mark = strstr(hevs[0].uri, hevs[0].buffer.file);
+    mark = strstr(hevs[0].uri, hevs[0].buffer.dst_file);
     memcpy(tslist->base_uri, hevs[0].uri, mark - hevs[0].uri - 1);
 
     int epfd;
@@ -260,13 +263,13 @@ static int parse_m3u8_file(http_event_t *hev, ts_list_t *ts_list)
     void *elt;
     char *p;
 	
-    p = strstr(hev->buffer.file, ".m3u8");
+    p = strstr(hev->buffer.dst_file, ".m3u8");
     if (p) {
-        snprintf(path, util_min(p - hev->buffer.file + 1, sizeof(path)),
-            "%s", hev->buffer.file);
+        snprintf(path, util_min(p - hev->buffer.dst_file + 1, sizeof(path)),
+            "%s", hev->buffer.dst_file);
     } else {
-        snprintf(path, util_min(strlen(hev->buffer.file) + 1, sizeof(path)), 
-            "%s", hev->buffer.file);
+        snprintf(path, util_min(strlen(hev->buffer.dst_file) + 1, sizeof(path)), 
+            "%s", hev->buffer.dst_file);
     }
 
     if (mkdir(path, 0755) == -1 && errno != EEXIST) {
@@ -282,8 +285,8 @@ static int parse_m3u8_file(http_event_t *hev, ts_list_t *ts_list)
     memcpy(&path[strlen(path)], FILE_TS_LIST, strlen(FILE_TS_LIST));
 
     // open m3u8 file
-	if ((src = open(hev->buffer.file, O_RDONLY)) == -1) {
-        log_error_errno("media: open '%s' failed", hev->buffer.file);
+	if ((src = open(hev->buffer.dst_file, O_RDONLY)) == -1) {
+        log_error_errno("media: open '%s' failed", hev->buffer.dst_file);
         goto err;
 	}
 
@@ -301,7 +304,7 @@ static int parse_m3u8_file(http_event_t *hev, ts_list_t *ts_list)
         }
         ret = read(src, buffer, sizeof(buffer));
         if (ret == -1) {
-            log_error_errno("media: read '%s' failed", hev->buffer.file);
+            log_error_errno("media: read '%s' failed", hev->buffer.dst_file);
             goto err;
         } else if (ret == 0) {
             break;
@@ -415,15 +418,9 @@ static int add_download_ts_event(int epfd, http_event_t *hev, ts_list_t *ts_list
 
     ev.data.ptr = hev;
 
-    ts = ts_list->get_ts_name(ts_list);
-    if (!ts) {
+    if (http_update_next_ts_uri(hev, ts_list) == 0) {
         return 0;
     }
-
-    memset(hev->uri, '\0', sizeof(hev->uri));
-    memcpy(hev->uri, ts_list->base_uri, strlen(ts_list->base_uri));
-    memcpy(&hev->uri[strlen(hev->uri)], "/", 1);
-    memcpy(&hev->uri[strlen(hev->uri)], ts, strlen(ts));
 
     hev->handler = util_calloc(4, sizeof(http_handler_t));
     if (!hev->handler) {
