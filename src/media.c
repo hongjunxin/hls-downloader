@@ -313,14 +313,14 @@ static int parse_m3u8_file(http_event_t *hev, ts_list_t *ts_list)
         mark = 0;
         for (i = 0; i < ret; ++i) {
             if (buffer[i] == '\n') {
-                if (buffer[i - 1] == 's' &&
-                        buffer[i - 2] == 't' &&
-                        buffer[i -3] == '.')
+                buffer[i] = '\0';
+                if ((p = strstr(&buffer[mark], ".ts")) != NULL)
                 {                               
                     ts_list->ts_cnt++;
+                    p += strlen(".ts");
 
-                    ret = i - mark + strlen("file ''\n") + 1;
-                    snprintf(line, ret, "file '%.*s'\n", (int) (i - mark), &buffer[mark]);
+                    ret = p - &buffer[mark] + strlen("file ''\n") + 1;
+                    snprintf(line, ret, "file '%.*s'\n", (int) (p - &buffer[mark]), &buffer[mark]);
                     --ret; /* ignore '\0' */ 
                     if (ret != write(dst, line, ret)) {
                         log_error_errno("media: write '%s' failed", path);
@@ -328,7 +328,7 @@ static int parse_m3u8_file(http_event_t *hev, ts_list_t *ts_list)
                     }
 
                     if (!ts_list->ts) {
-                        ts_list->ts = util_create_list(i - mark + 5, 500);
+                        ts_list->ts = util_create_list(p - &buffer[mark] + 5, 500);
                         if (!ts_list->ts) {
                             return -1;
                         }                                            
@@ -337,10 +337,11 @@ static int parse_m3u8_file(http_event_t *hev, ts_list_t *ts_list)
                     if (!elt) {
                         return -1;
                     }
-                    memcpy(elt, &buffer[mark], i - mark);
+                    memcpy(elt, &buffer[mark], p - &buffer[mark]);
                 }
                 cnt += (i - mark + 1);
                 mark = i + 1;
+                buffer[i] = '\n';
             }            
         }
     }
