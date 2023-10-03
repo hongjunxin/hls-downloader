@@ -493,7 +493,6 @@ int http_read_response(http_event_t *hev)
         memset(buffer->buf, '\0', sizeof(buffer->buf));
         buffer->len = 0;
         buffer->cnt = 0;
-        buffer->pre_unwritten_len = 0;
         buffer->dst = -1;
         hev->doing = 1;
     }

@@ -231,6 +231,7 @@ static int download_ts_files(http_event_t *hevs, ts_list_t *tslist, int fd_nums)
         memcpy(hevs[i].buffer.dir, hevs[0].buffer.dir, strlen(hevs[0].buffer.dir));
         memcpy(hevs[i].host, hevs[0].host, strlen(hevs[0].host));
         memcpy(hevs[i].ip, hevs[0].ip, strlen(hevs[0].ip));
+        memcpy(hevs[i].parameter, hevs[0].parameter, strlen(hevs[0].parameter));
         hevs[i].port = hevs[0].port;
         hevs[i].use_ssl = hevs[0].use_ssl;
 
@@ -309,9 +310,7 @@ static int parse_m3u8_file(http_event_t *hev, ts_list_t *ts_list)
         } else if (ret == 0) {
             break;
         }
-        // https://ragrehgtrahd.sw-cdnstream.com/hls2/01/00093/d14nv0p2hwea_o
-        // /seg-886-v1-a1.ts?t=dueo5xDqwUzjDFMmwDU0YD4rxf0CSLY9ncaFlFUFKrs&s=
-        // 1696318107&e=129600&f=468560&srv=taqpatuhtrfg&i=0.4&sp=500&p1=taqpatuhtrfg&p2=taqpatuhtrfg&asn=4760
+
         mark = 0;
         for (i = 0; i < ret; ++i) {
             if (buffer[i] == '\n') {

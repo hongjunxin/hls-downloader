@@ -35,7 +35,6 @@ typedef struct {
     ssize_t len;
     ssize_t cnt;
     ssize_t pre_cnt;
-    ssize_t pre_unwritten_len;  /* for chunked data */
     int dst;             /* dst file fd */
     char dst_file[256];  /* dst file name */
     char dir[256];       /* dst file dir exclude m3u8 */
@@ -71,7 +70,7 @@ struct http_event_s {
 
 typedef struct ts_list {
     char *m3u8_url;
-    char base_uri[256];  // bug: missing handle parameter
+    char base_uri[256];
     int ts_cnt;
     int taken_cnt;
     int failure;
