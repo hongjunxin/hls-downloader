@@ -23,7 +23,7 @@ typedef int (*http_event_handler_pt)(http_event_t *ev);
 typedef struct {
     int status;
     ssize_t content_length;
-    unsigned chuncked:1;
+    unsigned chunked:1;
 } http_headers_in_t;
 
 typedef struct {
@@ -35,6 +35,7 @@ typedef struct {
     ssize_t len;
     ssize_t cnt;
     ssize_t pre_cnt;
+    ssize_t pre_unwritten_len;  /* for chunked data */
     int dst;             /* dst file fd */
     char dst_file[256];  /* dst file name */
     char dir[256];       /* dst file dir exclude m3u8 */

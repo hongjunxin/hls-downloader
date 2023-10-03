@@ -41,6 +41,8 @@ extern int errno;
 extern int h_errno;
 
 static int http_save_file(http_event_t *hev);
+static int http_save_chunked_file(http_event_t *hev);
+static int http_get_chunked_size(const char *hex, int *size);
 static int http_get_resp_headers(http_event_t *hev);
 static int http_ssl_connect(http_event_t *hev);
 static int check_server_certificate(X509 *cert, char *host);
@@ -491,6 +493,7 @@ int http_read_response(http_event_t *hev)
         memset(buffer->buf, '\0', sizeof(buffer->buf));
         buffer->len = 0;
         buffer->cnt = 0;
+        buffer->pre_unwritten_len = 0;
         buffer->dst = -1;
         hev->doing = 1;
     }
@@ -561,7 +564,7 @@ int http_read_response(http_event_t *hev)
 
             if (strcmp(h->key, "Transfer-Encoding") == 0 &&
                     strcmp(h->value, "chunked") == 0) {
-                hev->headers_in.chuncked = 1;        
+                hev->headers_in.chunked = 1;        
             }
         }
     }
@@ -584,24 +587,28 @@ err:
     return -1;    
 }
 
-// todo: add download chuncked
 int http_download_file(http_event_t *hev)
 {
     ssize_t ret;
-    struct stat st;
+    int fd = -1;
     http_buffer_t *buffer = &hev->buffer;
     
     if (!hev->doing) {
         hev->doing = 1;
         buffer->pre_cnt = 0;
 
-        if (hev->headers_in.content_length == 0 && hev->headers_in.chuncked == 0) {
-            log_error("http: Content-Length is 0, and not chuncked");
+        if (hev->headers_in.content_length == 0 && hev->headers_in.chunked == 0) {
+            log_error("http: Content-Length is 0, and not chunked");
             return -1;
         }
 
-        log_debug("http: saving to '%s', content length %ld bytes, fd=%d", 
-            buffer->dst_file, hev->headers_in.content_length, hev->fd);
+        if (hev->headers_in.chunked) {
+            log_debug("http: saving to '%s', chunked data, fd=%d", 
+                buffer->dst_file, hev->fd);
+        } else {
+            log_debug("http: saving to '%s', content length %ld bytes, fd=%d", 
+                buffer->dst_file, hev->headers_in.content_length, hev->fd);
+        }
 
         char tmppath[522] = {'\0'};
         if (strlen(buffer->dir) > 0) {
@@ -610,7 +617,7 @@ int http_download_file(http_event_t *hev)
             snprintf(tmppath, sizeof(tmppath) - 1, "%s.tmp", buffer->dst_file);
         }
 
-        if ((buffer->dst = open(tmppath, O_CREAT|O_WRONLY|O_TRUNC, 0644)) == -1) {
+        if ((buffer->dst = open(tmppath, O_CREAT|O_RDWR|O_TRUNC, 0644)) == -1) {
             log_error("http: open '%s' failed", tmppath);
             goto err;
         }
@@ -633,7 +640,11 @@ int http_download_file(http_event_t *hev)
         buffer->cnt = 0;
     }
 
-    ret = http_save_file(hev);
+    if (hev->headers_in.content_length > 0) {
+        ret = http_save_file(hev);
+    } else {
+        ret = http_save_chunked_file(hev);
+    }
 
     if (ret == 0) {
         char dstpath[522] = {'\0'};
@@ -647,17 +658,75 @@ int http_download_file(http_event_t *hev)
             snprintf(dstpath, sizeof(dstpath) - 1, "%s", buffer->dst_file);
         }
 
-        if (rename(tmppath, dstpath) != 0) {
-            log_error("rename '%s' to '%s' failed, fd=%d, %s",
-                      tmppath, dstpath, hev->fd, strerror(errno));
+        if (hev->headers_in.chunked) {
+            char buf[256 * 1024] = {'\0'};
+            fd = open(dstpath, O_CREAT|O_WRONLY|O_TRUNC, 0664);
+            if (fd == -1) {
+                log_error("open '%s' failed, %s", dstpath, strerror(errno));
+                goto err;
+            }
+
+            lseek(buffer->dst, 0, SEEK_SET);
+
+            char str_size[32] = {'\0'};
+            int i = 0, size;
+            for (;;) {
+                if (read(buffer->dst, &str_size[i], 1) != 1) {
+                    log_error("http: read char from '%s' failed, %s", tmppath, strerror(errno));
+                    goto err;
+                }
+                if (str_size[i] == '\r') {
+                    read(buffer->dst, &str_size[i], 1);
+                    str_size[i] = '\0';
+                    http_get_chunked_size(str_size, &size);
+                    if (size == 0) {
+                        break;
+                    }
+                    i = 0;
+                    if (size > sizeof(buf)) {
+                        int cnt;
+                        while (size > 0) {
+                            cnt = (size > sizeof(buf)) ? sizeof(buf) : size;
+                            if (cnt != read(buffer->dst, buf, cnt)) {
+                                log_error("http: read '%s' in part", tmppath);
+                                goto err;
+                            }
+                            if (cnt != write(fd, buf, sizeof(buf))) {
+                                log_error("http: write '%s' in part", dstpath);
+                                goto err;
+                            }
+                            size -= sizeof(buf);
+                        }
+                    } else {
+                        if (size != read(buffer->dst, buf, size)) {
+                            log_error("http: read '%s' in part", tmppath);
+                            goto err;
+                        }
+                        if (size != write(fd, buf, size)) {
+                            log_error("http: write '%s' in part", dstpath);
+                            goto err;
+                        }
+                    }
+                    read(buffer->dst, &str_size[i], 2);  // skip "\r\n"
+                } else {
+                    i++;
+                }
+            }
+            close(fd);
+            remove(tmppath);
         } else {
-            log_debug("http: save '%s' done, fd=%d", dstpath, hev->fd);
+            if (rename(tmppath, dstpath) != 0) {
+                log_error("rename '%s' to '%s' failed, fd=%d, %s",
+                          tmppath, dstpath, hev->fd, strerror(errno));
+            }
         }
 
         char *closed = http_find_header(hev->resp_headers, "Connection");
         if (closed && strcmp(closed, "close") == 0) {
             hev->reset_fd = 1;
         }
+
+        log_debug("http: save '%s' done, fd=%d", dstpath, hev->fd);
 
         hev->doing = 0;
         close(buffer->dst);
@@ -675,6 +744,11 @@ err:
         close(buffer->dst);
         buffer->dst = -1;
     }
+
+    if (fd != -1) {
+        close(fd);
+    }
+
     return -1;
 }
 
@@ -756,7 +830,7 @@ static int http_save_file(http_event_t *hev)
         buffer->cnt += ret;
 
         if (ret != write(buffer->dst, buf, ret)) {
-            log_error( "http: write '%s' failed", buffer->dst_file);
+            log_error( "http: write '%s' in part", buffer->dst_file);
             return -1;
         }
     }
@@ -767,6 +841,53 @@ done:
                   buffer->cnt, buffer->len, hev->headers_in.content_length, hev->uri);
         return -1;
     }
+    return 0;
+}
+
+static int http_get_chunked_size(const char *hex, int *size)
+{
+    sscanf(hex, "%X", size);
+}
+
+static int http_save_chunked_file(http_event_t *hev)
+{
+    ssize_t ret = 0;
+    char buf[256 * 1024];
+    int i;
+
+    http_buffer_t *buffer = &hev->buffer;
+
+    for (;;) {
+        memset(buf, '\0', sizeof(buf));
+
+        if (hev->use_ssl) {
+            ret = SSL_read(hev->ssl, buf, sizeof(buf));
+        } else {
+            ret = read(hev->fd, buf, sizeof(buf));
+        }
+
+        if (ret == -1) {
+            if (errno != EAGAIN) {
+                log_error("http: received body of '%s' error, %s", hev->uri, strerror(errno));
+            }
+            return errno == EAGAIN ? EAGAIN : -1;
+        }
+
+        if (ret != write(buffer->dst, buf, ret)) {
+            log_error( "http: write '%s' in part", buffer->dst_file);
+            return -1;
+        }
+
+        if (ret > 4 && 
+                buf[ret - 4] == '\r' &&
+                buf[ret - 3] == '\n' &&
+                buf[ret - 2] == '\r' &&
+                buf[ret - 1] == '\n') {
+            log_debug("http: got the end of chunked data");
+            return 0;
+        }
+    }
+
     return 0;
 }
 

@@ -309,18 +309,31 @@ static int parse_m3u8_file(http_event_t *hev, ts_list_t *ts_list)
         } else if (ret == 0) {
             break;
         }
-
+        // https://ragrehgtrahd.sw-cdnstream.com/hls2/01/00093/d14nv0p2hwea_o
+        // /seg-886-v1-a1.ts?t=dueo5xDqwUzjDFMmwDU0YD4rxf0CSLY9ncaFlFUFKrs&s=
+        // 1696318107&e=129600&f=468560&srv=taqpatuhtrfg&i=0.4&sp=500&p1=taqpatuhtrfg&p2=taqpatuhtrfg&asn=4760
         mark = 0;
         for (i = 0; i < ret; ++i) {
             if (buffer[i] == '\n') {
                 buffer[i] = '\0';
                 if ((p = strstr(&buffer[mark], ".ts")) != NULL)
-                {                               
+                {           
                     ts_list->ts_cnt++;
                     p += strlen(".ts");
 
-                    ret = p - &buffer[mark] + strlen("file ''\n") + 1;
-                    snprintf(line, ret, "file '%.*s'\n", (int) (p - &buffer[mark]), &buffer[mark]);
+                    char *ts_name_begin;
+                    if (strstr(&buffer[mark], "http") == NULL) {
+                        ts_name_begin = &buffer[mark];
+                    } else {
+                        ts_name_begin = p;
+                        while (*ts_name_begin != '/') {
+                            ts_name_begin--;
+                        }
+                        ts_name_begin++;
+                    }
+
+                    ret = p - ts_name_begin + strlen("file ''\n") + 1;
+                    snprintf(line, ret, "file '%.*s'\n", (int) (p - ts_name_begin), ts_name_begin);
                     --ret; /* ignore '\0' */ 
                     if (ret != write(dst, line, ret)) {
                         log_error_errno("media: write '%s' failed", path);
@@ -328,7 +341,7 @@ static int parse_m3u8_file(http_event_t *hev, ts_list_t *ts_list)
                     }
 
                     if (!ts_list->ts) {
-                        ts_list->ts = util_create_list(p - &buffer[mark] + 5, 500);
+                        ts_list->ts = util_create_list(p - ts_name_begin + 5, 500);
                         if (!ts_list->ts) {
                             return -1;
                         }                                            
@@ -337,7 +350,7 @@ static int parse_m3u8_file(http_event_t *hev, ts_list_t *ts_list)
                     if (!elt) {
                         return -1;
                     }
-                    memcpy(elt, &buffer[mark], p - &buffer[mark]);
+                    memcpy(elt, ts_name_begin, p - ts_name_begin);
                 }
                 cnt += (i - mark + 1);
                 mark = i + 1;
