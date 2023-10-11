@@ -898,6 +898,7 @@ int http_parse_video_url(char *url, http_event_t *hev)
 
     // todo: ignore https_proxy so far
     if ((proxy = getenv("http_proxy")) != NULL) {
+        hev->proxy = 1;
         hev->use_ssl = 0;
 
         p1 = proxy + strlen("http://");
@@ -941,6 +942,8 @@ int http_parse_video_url(char *url, http_event_t *hev)
         // hev->uri is url if use proxy, such as http://host/path?k1=v1
         snprintf(hev->uri, sizeof(hev->uri), "%s", url);
     } else {
+        hev->proxy = 0;
+
         if (strstr(url, "https://") != NULL) {
             p2 = url + strlen("https://");
             hev->use_ssl = 1;

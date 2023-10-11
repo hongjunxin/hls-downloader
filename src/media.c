@@ -203,9 +203,6 @@ static int download_ts_files(http_event_t *hevs, ts_list_t *tslist, int fd_nums)
 
     memcpy(m3u8_file, hevs[0].buffer.dst_file, strlen(hevs[0].buffer.dst_file));
 
-    mark = strstr(hevs[0].uri, hevs[0].buffer.dst_file);
-    memcpy(tslist->base_uri, hevs[0].uri, mark - hevs[0].uri - 1);
-
     int epfd;
     http_event_t *hev;
 
@@ -262,7 +259,11 @@ static int parse_m3u8_file(http_event_t *hev, ts_list_t *ts_list)
     char path[128];
     ssize_t cnt, ret, i, mark;
     void *elt;
-    char *p;
+    char *p, *q;
+    int check_base_uri_done = 0;
+
+    q = strstr(hev->uri, hev->buffer.dst_file);
+    memcpy(ts_list->base_uri, hev->uri, q - hev->uri - 1);
 	
     p = strstr(hev->buffer.dst_file, ".m3u8");
     if (p) {
@@ -329,6 +330,33 @@ static int parse_m3u8_file(http_event_t *hev, ts_list_t *ts_list)
                             ts_name_begin--;
                         }
                         ts_name_begin++;
+                        if (!check_base_uri_done) {
+                            check_base_uri_done = 1;
+                            if (strstr(&buffer[mark], ts_list->base_uri) == NULL) {
+                                if (!hev->proxy) {
+                                    log_error("ts url point to another host, and we not using proxy, to support.");
+                                    return -1;
+                                }
+                                memset(ts_list->base_uri, '\0', sizeof(ts_list->base_uri));
+                                memcpy(ts_list->base_uri, &buffer[mark], ts_name_begin - &buffer[mark] - 1);
+                                
+                                if (*p == '?') {
+                                    snprintf(hev->parameter, sizeof(hev->parameter), "%s", p + 1);
+                                }
+
+                                char *m, *n;
+                                m = &buffer[mark] + strlen("http://");
+                                if (strstr(&buffer[mark], "https://")) {
+                                    m++;
+                                }
+                                n = m;
+                                while (*n != '/') {
+                                    n++;
+                                }
+                                memset(hev->host, '\0', sizeof(hev->host));
+                                memcpy(hev->host, m, n - m);
+                            }
+                        }
                     }
 
                     ret = p - ts_name_begin + strlen("file ''\n") + 1;

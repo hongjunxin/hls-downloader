@@ -66,6 +66,7 @@ struct http_event_s {
     unsigned use_ssl:1;
     unsigned reset_fd:1;
     unsigned done:1;
+    unsigned proxy:1;
 };
 
 typedef struct ts_list {
