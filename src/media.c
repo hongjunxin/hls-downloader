@@ -9,6 +9,7 @@
 #include "http.h"
 #include "epoll.h"
 #include "log.h"
+#include "config.h"
 
 static int download_hls(char *m3u8_url, char *filename_out, int fd_nums);
 static int get_m3u8_file(http_event_t *hev, ts_list_t *ts_list);
@@ -18,6 +19,8 @@ static int add_download_ts_event(int epfd, http_event_t *hev, ts_list_t *ts_list
 static char* get_ts_file_name(ts_list_t *ts_list);
 static void merge_ts_files_task(char *desc_file, char *out_file); // use ffmpeg tool
 static int merge_ts_files(const char *ts_list, int ts_nums, const char *out_filename); // use ffmpeg libav
+
+extern config_t gconfig;
 
 static char m3u8_file[256] = {'\0'};
 
@@ -144,7 +147,7 @@ static int download_hls(char *m3u8_url, char *filename_out, int fd_nums)
 #endif
 
     len = strlen(hevs[0].buffer.dir) + strlen(filename_out) + 2;
-    oldpath = util_calloc(sizeof(char), len);
+    oldpath = util_calloc(len, sizeof(char));
     if (!oldpath) {
         goto error;
     }
@@ -316,10 +319,10 @@ static int parse_m3u8_file(http_event_t *hev, ts_list_t *ts_list)
         for (i = 0; i < ret; ++i) {
             if (buffer[i] == '\n') {
                 buffer[i] = '\0';
-                if ((p = strstr(&buffer[mark], ".ts")) != NULL)
+                if ((p = strstr(&buffer[mark], gconfig.segment_file_suffix)) != NULL)
                 {           
                     ts_list->ts_cnt++;
-                    p += strlen(".ts");
+                    p += strlen(gconfig.segment_file_suffix);
 
                     char *ts_name_begin;
                     if (strstr(&buffer[mark], "http") == NULL) {

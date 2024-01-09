@@ -15,12 +15,9 @@
 #include "log.h"
 #include "utility.h"
 #include "media.h"
+#include "config.h"
 
-typedef struct config {
-    int fd_nums;
-    char *video_url;    // such as http://xxx/yy.m3u8 or http://xxx/yy.flv
-    char *filename_out;
-} config_t;
+config_t gconfig;
 
 static int parse_option(int argc, char **argv, config_t *conf);
 static void set_log_level(char *level);
@@ -37,7 +34,6 @@ int main(int argc, char **argv)
 {
     struct sigaction sa;
     int ret;
-    config_t config = {.fd_nums = 20, .video_url = NULL, .filename_out = NULL};
 
 #if USE_FFMPEG_TOOL
 
@@ -57,13 +53,18 @@ int main(int argc, char **argv)
         return -1;
     }
 
-    if (parse_option(argc, argv, &config) != 0) {
+    gconfig.fd_nums = 20;
+    snprintf(gconfig.segment_file_suffix, sizeof(gconfig.segment_file_suffix), ".ts");
+    gconfig.filename_out = NULL;
+    gconfig.video_url = NULL;
+
+    if (parse_option(argc, argv, &gconfig) != 0) {
         return -1;
     }
 
-    ret = download_video(config.video_url, config.filename_out, config.fd_nums);
+    ret = download_video(gconfig.video_url, gconfig.filename_out, gconfig.fd_nums);
     if (ret == -1) {
-        log_error("main: download video from %s failed", config.video_url);
+        log_error("main: download video from %s failed", gconfig.video_url);
     }
 
     return ret;
@@ -89,10 +90,10 @@ static int parse_option(int argc, char **argv, config_t *conf)
         return -1;
     }
 
-    while ((ch = getopt(argc, argv, "i:o:l:c:h")) != -1) {
+    while ((ch = getopt(argc, argv, "i:o:l:c:s:h")) != -1) {
         switch (ch) {
         case 'i':
-            conf->video_url = util_calloc(sizeof(char), strlen(optarg) + 1);
+            conf->video_url = util_calloc(strlen(optarg) + 1, sizeof(char));
             if (!conf->video_url) {
                 return -1;
             }
@@ -104,7 +105,7 @@ static int parse_option(int argc, char **argv, config_t *conf)
                     optarg, DEFAULT_OUTPUT_FILE);
                 conf->filename_out = DEFAULT_OUTPUT_FILE;
             } else {
-                conf->filename_out = util_calloc(sizeof(char), strlen(optarg) + 1);
+                conf->filename_out = util_calloc(strlen(optarg) + 1, sizeof(char));
                 if (!conf->filename_out) {
                     return -1;
                 }
@@ -119,6 +120,9 @@ static int parse_option(int argc, char **argv, config_t *conf)
             if (conf->fd_nums == 0) {
                 conf->fd_nums = 10;
             }
+            break;
+        case 's':
+            snprintf(conf->segment_file_suffix, sizeof(conf->segment_file_suffix), "%s", optarg);
             break;
         case 'h':
             usage();
