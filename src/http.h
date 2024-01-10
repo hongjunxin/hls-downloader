@@ -27,8 +27,8 @@ typedef struct {
 } http_headers_in_t;
 
 typedef struct {
-    char key[64];
-    char value[256];
+    char key[128];
+    char value[1024];
 } header_t;
 
 typedef struct {

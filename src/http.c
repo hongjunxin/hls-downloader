@@ -31,7 +31,7 @@
 
 #define REQUEST_HEAD \
         "GET %s HTTP/1.1\r\n"                      \
-        "User-Agent: Wget/1.20.3 (linux-gnu)\r\n"  \
+        "User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)\r\n"  \
         "Accept: */*\r\n"                          \
         "Host: %s\r\n"                             \
         "Connection: Keep-Alive\r\n"               \
@@ -537,12 +537,11 @@ int http_read_response(http_event_t *hev)
                 log_error("http: header format error");
                 goto err;
             }
-            header_t *h = (header_t*) malloc(sizeof(header_t));
+            header_t *h = (header_t*) util_calloc(1, sizeof(header_t));
             if (!h) {
                 log_error("malloc header_t error");
                 goto err;
             }
-            memset(h, '\0', sizeof(header_t));
 
             char *p1, *p2;
             p1 = line;

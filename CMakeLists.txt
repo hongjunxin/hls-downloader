@@ -6,6 +6,7 @@ option(USE_FFMPEG_TOOL "Use ffmpeg tool" OFF)
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake/Modules)
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g")
+# set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -O0 -fsanitize=leak -fno-omit-frame-pointer")
 
 set(DHLS_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/main.c
@@ -29,3 +30,4 @@ endif()
 
 find_package(OpenSSL REQUIRED)
 target_link_libraries(${PROJECT_NAME} PRIVATE OpenSSL::SSL m z)
+# target_link_libraries(${PROJECT_NAME} PRIVATE asan)
