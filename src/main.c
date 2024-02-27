@@ -76,7 +76,8 @@ static void usage()
            "  -i [m3u8 url]               eg: '-i https://example.com/hls/index.m3u8'\n"
            "  -o [output path]            eg: '-o output.mp4'\n"   
            "  -l [error|warn|info|debug]\n" 
-           "  -c [num]                    concurrent fd to download ts file\n"          
+           "  -c [num]                    concurrent fd to download ts file\n"      
+           "  -s [ts as default]          segment file suffix\n"    
            "  -h                          show this help\n");
 }
 
