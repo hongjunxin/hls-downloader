@@ -488,7 +488,7 @@ static int add_download_ts_event(int epfd, http_event_t *hev, ts_list_t *ts_list
 
 static int copy_packet(AVFormatContext *in_format_ctx, 
                             AVFormatContext *out_format_ctx,
-                            int *streams_list)
+                            int *streams_list, int *pre_dts)
 {
     AVPacket packet;
     AVStream *in_stream, *out_stream;
@@ -514,7 +514,15 @@ static int copy_packet(AVFormatContext *in_format_ctx,
         // https://ffmpeg.org/doxygen/trunk/structAVPacket.html#ab5793d8195cf4789dfb3913b7a693903
         packet.pos = -1;
 
-        //https://ffmpeg.org/doxygen/trunk/group__lavf__encoding.html#ga37352ed2c63493c38219d935e71db6c1
+        if (packet.dts <= pre_dts[packet.stream_index]) {
+            pre_dts[packet.stream_index]++;
+            packet.dts = pre_dts[packet.stream_index];
+        } 
+        pre_dts[packet.stream_index] = packet.dts;
+        if (packet.pts < packet.dts) {
+            packet.pts = packet.dts;
+        }
+
         ret = av_interleaved_write_frame(out_format_ctx, &packet);
         if (ret < 0) {
             log_error("media: muxing packet error");
@@ -558,6 +566,7 @@ static int merge_ts_files(const char *ts_list, int ts_nums, const char *out_file
     int stream_index = 0;
     int number_of_streams = 0;
     int *streams_list = NULL;
+    int *pre_dts = NULL;
     char in_filename[128] = {'\0'};
 
     fd = open(ts_list, O_RDONLY);
@@ -594,6 +603,7 @@ static int merge_ts_files(const char *ts_list, int ts_nums, const char *out_file
     number_of_streams = in_format_ctx->nb_streams;
     streams_list = av_malloc_array(number_of_streams, sizeof(*streams_list));
     memset(streams_list, 0, number_of_streams * sizeof(*streams_list));
+    pre_dts = (int*) calloc(number_of_streams, sizeof(int));
 
     if (streams_list == NULL) {
         ret = AVERROR(ENOMEM);
@@ -656,7 +666,7 @@ static int merge_ts_files(const char *ts_list, int ts_nums, const char *out_file
         goto end;
     }
 
-    ret = copy_packet(in_format_ctx, out_format_ctx, streams_list);
+    ret = copy_packet(in_format_ctx, out_format_ctx, streams_list, pre_dts);
     avformat_close_input(&in_format_ctx);
     if (ret == -1) {
         log_error("media: copy '%s' to '%s' failed", in_filename, out_filename);
@@ -680,7 +690,7 @@ static int merge_ts_files(const char *ts_list, int ts_nums, const char *out_file
                 log_error("media: avformat_find_stream_info() from '%s' failed", in_filename);
                 goto end;
             }
-            ret = copy_packet(in_format_ctx, out_format_ctx, streams_list);
+            ret = copy_packet(in_format_ctx, out_format_ctx, streams_list, pre_dts);
             avformat_close_input(&in_format_ctx);
             if (ret == -1) {
                 log_error("media: copy '%s' to '%s' failed", in_filename, out_filename);
@@ -711,6 +721,7 @@ end:
     }
 
     av_freep(&streams_list);
+    free(pre_dts);
     if (ret == -1) {
         return ret;
     }
