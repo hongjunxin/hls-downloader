@@ -28,17 +28,18 @@
 #include "log.h"
 #include "http.h"
 #include "utility.h"
+#include "config.h"
 
 #define REQUEST_HEAD \
         "GET %s HTTP/1.1\r\n"                      \
         "User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)\r\n"  \
         "Accept: */*\r\n"                          \
         "Host: %s\r\n"                             \
-        "Connection: Keep-Alive\r\n"               \
-        "\r\n"                                     \
+        "Connection: Keep-Alive\r\n"
 
 extern int errno;
 extern int h_errno;
+extern config_t gconfig;
 
 static int http_save_file(http_event_t *hev);
 static int http_save_chunked_file(http_event_t *hev);
@@ -439,6 +440,12 @@ int http_send_request(http_event_t *hev)
     if (!hev->doing) {
         memset(buffer->buf, '\0', sizeof(buffer->buf));
         snprintf(buffer->buf, sizeof(buffer->buf) - 1, REQUEST_HEAD, hev->uri, hev->host);
+        for (int i = 0; i < gconfig.request_header_count; i++) {
+            size_t used = strlen(buffer->buf);
+            snprintf(buffer->buf + used, sizeof(buffer->buf) - used - 1,
+                "%s\r\n", gconfig.request_headers[i]);
+        }
+        strncat(buffer->buf, "\r\n", sizeof(buffer->buf) - strlen(buffer->buf) - 1);
         buffer->len = strlen(buffer->buf);
         buffer->cnt = 0;
         buffer->dst = -1;
@@ -458,6 +465,8 @@ int http_send_request(http_event_t *hev)
         if (ret == -1) {
             if (errno == EAGAIN) {
                 return EAGAIN;
+            } else if (errno == EINTR) {
+                continue;
             }
             goto err;
         }
@@ -772,6 +781,8 @@ static int http_get_resp_headers(http_event_t *hev)
         if (ret == -1) {
             if (errno == EAGAIN) {
                 return EAGAIN;
+            } else if (errno == EINTR) {
+                continue;
             }
             log_info("http: read response error, %s", strerror(errno));
             goto err;
@@ -818,10 +829,14 @@ static int http_save_file(http_event_t *hev)
         }
 
         if (ret == -1) {
-            if (errno != EAGAIN) {
+            if (errno == EAGAIN) {
+                return EAGAIN;
+            } else if (errno == EINTR) {
+                continue;
+            } else {
                 log_error("http: received body of '%s' error, %s", hev->uri, strerror(errno));
+                return -1;
             }
-            return errno == EAGAIN ? EAGAIN : -1;
         } else if (ret == 0) {
             goto done;
         }
@@ -865,10 +880,14 @@ static int http_save_chunked_file(http_event_t *hev)
         }
 
         if (ret == -1) {
-            if (errno != EAGAIN) {
+            if (errno == EAGAIN) {
+                return EAGAIN;
+            } else if (errno == EINTR) {
+                continue;
+            } else {
                 log_error("http: received body of '%s' error, %s", hev->uri, strerror(errno));
+                return -1;
             }
-            return errno == EAGAIN ? EAGAIN : -1;
         }
 
         if (ret != write(buffer->dst, buf, ret)) {

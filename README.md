@@ -5,6 +5,7 @@ FFmpeg tool can download hls stream and convert it to specified format video. Bu
 ## usage
 ```
 $ ./dhls -i http://example.com/xxx/index.m3u8 -o sample.mp4
+$ ./dhls -i http://example.com/xxx/index.m3u8 -o sample.mp4 -H 'Referer: https://example.com' -H 'Cookie: foo=bar'
 ```
 
 option
@@ -12,6 +13,7 @@ option
 - -o [output file name], include format
 - -l [error | warn | info | debug], debug level (default error)
 - -c [fd number], specified the number of fd to download ts files (default 20). It doesn't mean fd number is the higher the better.
+- -H [header], append request header, can be specified multiple times. Example: `-H 'Referer: https://example.com'`
 
 ## thirdparty
 - libcurl

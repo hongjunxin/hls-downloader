@@ -57,6 +57,7 @@ int main(int argc, char **argv)
     snprintf(gconfig.segment_file_suffix, sizeof(gconfig.segment_file_suffix), ".ts");
     gconfig.filename_out = NULL;
     gconfig.video_url = NULL;
+    gconfig.request_header_count = 0;
 
     if (parse_option(argc, argv, &gconfig) != 0) {
         return -1;
@@ -78,6 +79,7 @@ static void usage()
            "  -l [error|warn|info|debug]\n" 
            "  -c [num]                    concurrent fd to download ts file\n"      
            "  -s [ts as default]          segment file suffix\n"    
+           "  -H [header]                 append request header, eg: -H 'Referer: https://example.com'\n"
            "  -h                          show this help\n");
 }
 
@@ -91,7 +93,7 @@ static int parse_option(int argc, char **argv, config_t *conf)
         return -1;
     }
 
-    while ((ch = getopt(argc, argv, "i:o:l:c:s:h")) != -1) {
+    while ((ch = getopt(argc, argv, "i:o:l:c:s:H:h")) != -1) {
         switch (ch) {
         case 'i':
             conf->video_url = util_calloc(strlen(optarg) + 1, sizeof(char));
@@ -124,6 +126,19 @@ static int parse_option(int argc, char **argv, config_t *conf)
             break;
         case 's':
             snprintf(conf->segment_file_suffix, sizeof(conf->segment_file_suffix), "%s", optarg);
+            break;
+        case 'H':
+            if (conf->request_header_count >= REQUEST_HEADERS_MAX) {
+                log_error("main: request headers more than %d", REQUEST_HEADERS_MAX);
+                return -1;
+            }
+            if (!strstr(optarg, ":")) {
+                log_error("main: invalid request header '%s', expected 'Key: Value'", optarg);
+                return -1;
+            }
+            snprintf(conf->request_headers[conf->request_header_count],
+                REQUEST_HEADER_LEN, "%s", optarg);
+            conf->request_header_count++;
             break;
         case 'h':
             usage();
